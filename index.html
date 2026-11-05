@@ -1,3 +1,4 @@
+
 <!doctype html>
 <html lang="en">
 <head>
@@ -129,7 +130,7 @@ th{color:var(--mute);font-weight:600;font-size:13px}
           <fieldset class="chk"><legend>Pre-trade checklist</legend><div id="checks"></div><p class="cnt" id="chkCount"></p></fieldset>
           <label for="date">Date and time</label><input id="date" type="datetime-local" required>
           <div class="row">
-            <div><label for="pair">Pair</label><input id="pair" list="pairs" value="XAUUSD" required><datalist id="pairs"><option value="XAUUSD"><option value="EURUSD"><option value="GBPUSD"><option value="USDJPY"></datalist></div>
+            <div><label for="pair">Pair</label><select id="pair"><option>XAUUSD</option><option>EURUSD</option><option>GBPUSD</option><option>USDJPY</option><option>GBPJPY</option><option value="__other">Other…</option></select><input id="pairOther" placeholder="e.g. USDCAD" style="margin-top:6px" hidden></div>
             <div><label for="dir">Direction</label><select id="dir"><option>Buy</option><option>Sell</option></select></div>
           </div>
           <div class="row">
@@ -288,7 +289,7 @@ function start() {
         if (up.error) throw up.error;
       }
       const payload = {
-        traded_at: new Date($('date').value).toISOString(), pair: $('pair').value.trim().toUpperCase(),
+        traded_at: new Date($('date').value).toISOString(), pair: pairValue(),
         direction: $('dir').value, session: $('session').value, lots: num($('lots').value), risk_amount: num($('risk').value),
         entry: num($('entry').value), sl: num($('sl').value), tp: num($('tp').value), pnl: num($('pnl').value),
         analysis: $('analysis').value, why: $('why').value, plan_followed: $('plan').value === 'Yes',
@@ -367,6 +368,18 @@ function start() {
   $('filter').addEventListener('change', render);
   $('dim').addEventListener('change', render);
 
+  function pairValue() { return ($('pair').value === '__other' ? $('pairOther').value : $('pair').value).trim().toUpperCase(); }
+  function setPair(p) {
+    const known = [...$('pair').options].some(o => o.value === p && o.value !== '__other');
+    $('pair').value = known ? p : '__other';
+    $('pairOther').hidden = known; $('pairOther').required = !known; $('pairOther').value = known ? '' : (p || '');
+  }
+  $('pair').addEventListener('change', () => {
+    const o = $('pair').value === '__other';
+    $('pairOther').hidden = !o; $('pairOther').required = o;
+    if (o) $('pairOther').focus();
+  });
+
   function showChecks() {
     const n = CHECKS.filter((_, i) => $('chk' + i).checked).length;
     $('chkCount').textContent = n + ' of ' + CHECKS.length + ' ticked. Tick only what is true.';
@@ -411,7 +424,7 @@ function start() {
     const d = new Date(t.traded_at); d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
     const set = (id, v) => { $(id).value = v == null ? '' : v; };
     $('date').value = d.toISOString().slice(0, 16);
-    set('pair', t.pair); set('dir', t.direction); set('session', t.session); set('setupTag', t.setup);
+    setPair(t.pair); set('dir', t.direction); set('session', t.session); set('setupTag', t.setup);
     set('lots', t.lots); set('entry', t.entry); set('sl', t.sl); set('tp', t.tp); set('pnl', t.pnl); set('risk', t.risk_amount);
     set('analysis', t.analysis); set('why', t.why); set('plan', t.plan_followed ? 'Yes' : 'No'); set('feel', t.feeling); set('lesson', t.lesson);
     CHECKS.forEach((_, i) => { $('chk' + i).checked = t.checklist_ok === true; });
@@ -422,7 +435,7 @@ function start() {
   }
   function cancelEdit(quiet) {
     editing = null; shotBlob = null; $('shot').value = ''; $('f').reset();
-    $('pair').value = 'XAUUSD'; $('session').value = 'London'; $('setupTag').value = '';
+    setPair('XAUUSD'); $('session').value = 'London'; $('setupTag').value = '';
     $('saveBtn').textContent = 'Save trade'; $('cancelEdit').hidden = true;
     if (!quiet) $('msg').textContent = '';
     setNow(); showRR(); showR(); showChecks();
