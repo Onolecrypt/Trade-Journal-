@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Trading Journal</title>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;600;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<style>
+:root{--bg:#eef1ec;--surface:#fbfcfa;--ink:#1c2420;--mute:#5d6a63;--line:#d3dad3;--win:#0f766e;--loss:#b4412f;--gold:#a87a1e;--grid:rgba(28,36,32,.06);color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#121815;--surface:#1b2420;--ink:#e6ece7;--mute:#93a29a;--line:#2d3a34;--win:#3fb8a8;--loss:#e07a66;--gold:#d9a645;--grid:rgba(230,236,231,.06);color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:24px 24px;color:var(--ink);font:400 16px/1.5 "Schibsted Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:1060px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:clamp(28px,6vw,44px);line-height:1.05;margin:0 0 4px;font-weight:800;letter-spacing:-.02em}
+.sub{color:var(--mute);margin:0 0 20px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px}
+.hero{display:grid;gap:16px;grid-template-columns:1fr;margin-bottom:20px}
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+.stat b{display:block;font-size:26px;font-weight:800}
+.stat span{color:var(--mute);font-size:14px}
+.pos{color:var(--win)}.neg{color:var(--loss)}
+.chart{width:100%;height:150px;display:block}
+.cols{display:grid;gap:20px;grid-template-columns:1fr}
+@media(min-width:860px){.hero{grid-template-columns:2fr 1fr}.cols.owner{grid-template-columns:380px 1fr;align-items:start}}
+h2{font-size:18px;margin:0 0 12px}
+label{display:block;font-size:14px;color:var(--mute);margin:10px 0 4px}
+input,select,textarea{width:100%;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:9px 10px;min-height:42px}
+textarea{min-height:70px;resize:vertical}
+:focus-visible{outline:2px solid var(--gold);outline-offset:1px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.rr{font-size:14px;color:var(--mute);margin-top:6px}
+button{font:inherit;cursor:pointer;border-radius:6px;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:9px 14px;min-height:42px}
+button.primary{background:var(--ink);color:var(--bg);border-color:var(--ink);font-weight:600;width:100%;margin-top:16px}
+button.small{min-height:34px;padding:5px 10px;font-size:14px}
+button:disabled{opacity:.6;cursor:wait}
+.tools{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center}
+.tools select{width:auto}
+.trade{border:1px solid var(--line);border-left-width:5px;border-radius:8px;background:var(--surface);margin-bottom:10px}
+.trade.win{border-left-color:var(--win)}.trade.loss{border-left-color:var(--loss)}.trade.be{border-left-color:var(--mute)}
+.trade summary{list-style:none;cursor:pointer;padding:12px 14px;display:flex;justify-content:space-between;gap:10px;align-items:center}
+.trade summary::-webkit-details-marker{display:none}
+.t1{font-weight:600}.t2{color:var(--mute);font-size:14px}
+.pl{font-weight:800;font-size:18px;white-space:nowrap}
+.body{padding:0 14px 14px;border-top:1px solid var(--line)}
+.body h3{font-size:14px;margin:12px 0 2px;color:var(--mute);font-weight:600}
+.body p{margin:0;white-space:pre-wrap}
+.body img{max-width:100%;border-radius:6px;border:1px solid var(--line);margin-top:12px}
+.empty{color:var(--mute);padding:24px;text-align:center;border:1px dashed var(--line);border-radius:8px}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:15px}
+th,td{text-align:right;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--mute);font-weight:600;font-size:13px}
+.small-n{color:var(--mute)}
+.tag{display:inline-block;font-size:12px;font-weight:400;border:1px solid var(--line);border-radius:99px;padding:1px 8px;margin-left:8px;color:var(--mute)}
+.trend{margin-bottom:20px}
+.trend-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.trend-head h2{margin:0}
+.trend-head select{width:auto}
+#trendBox{max-width:480px;margin:0 auto;min-height:120px}
+.note{color:var(--mute);font-size:13px;margin:8px 0 0;text-align:center}
+.msg{font-size:14px;margin-top:8px;min-height:1em}
+.owner-link{background:none;border:0;color:var(--mute);text-decoration:underline;min-height:0;padding:0;font-size:14px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Trading journal</h1>
+  <p class="sub" id="sub">Every trade, with the chart and the reasoning behind it.</p>
+
+  <div id="setup" class="panel" hidden>
+    <h2>Almost there</h2>
+    <p>Open <code>index.html</code>, find <code>SUPABASE_URL</code> and <code>SUPABASE_ANON_KEY</code> near the top of the script, and paste in the values from your Supabase project settings.</p>
+  </div>
+
+  <div id="app" hidden>
+    <section class="hero">
+      <div class="panel"><h2>Account curve</h2><svg id="chart" class="chart" viewBox="0 0 600 150" preserveAspectRatio="none" role="img" aria-label="Cumulative profit and loss"></svg></div>
+      <div class="panel stats" id="stats"></div>
+    </section>
+
+    <section class="panel trend">
+      <div class="trend-head">
+        <h2>Market trend</h2>
+        <select id="sym" aria-label="Choose market">
+          <option value="OANDA:XAUUSD">XAUUSD</option>
+          <option value="OANDA:EURUSD">EURUSD</option>
+          <option value="OANDA:GBPUSD">GBPUSD</option>
+          <option value="OANDA:USDJPY">USDJPY</option>
+        </select>
+      </div>
+      <div id="trendBox"><p class="note">Loading trend…</p></div>
+      <p class="note">Live technical reading from TradingView. Use the tabs to switch timeframes. Prices can differ slightly from your broker.</p>
+    </section>
+
+    <section class="panel trend">
+      <div class="trend-head">
+        <h2>Breakdown</h2>
+        <select id="dim" aria-label="Group trades by">
+          <option value="setup">By setup</option>
+          <option value="pair">By pair</option>
+          <option value="session">By session</option>
+          <option value="weekday">By weekday</option>
+        </select>
+      </div>
+      <div class="scroll" id="bd"></div>
+      <p class="note">Groups with fewer than 5 trades are too small to trust yet.</p>
+    </section>
+
+    <div class="cols" id="cols">
+      <section class="panel" id="ownerPane" hidden>
+        <h2>New trade</h2>
+        <form id="f">
+          <label for="date">Date and time</label><input id="date" type="datetime-local" required>
+          <div class="row">
+            <div><label for="pair">Pair</label><input id="pair" list="pairs" value="XAUUSD" required><datalist id="pairs"><option value="XAUUSD"><option value="EURUSD"><option value="GBPUSD"><option value="USDJPY"></datalist></div>
+            <div><label for="dir">Direction</label><select id="dir"><option>Buy</option><option>Sell</option></select></div>
+          </div>
+          <div class="row">
+            <div><label for="session">Session</label><select id="session"><option>Asian</option><option selected>London</option><option>New York</option><option>Overlap</option></select></div>
+            <div><label for="lots">Lot size</label><input id="lots" type="number" step="any" min="0" placeholder="0.10"></div>
+          </div>
+          <label for="setup">Setup</label><select id="setup"></select>
+          <div class="row">
+            <div><label for="entry">Entry</label><input id="entry" type="number" step="any" inputmode="decimal"></div>
+            <div><label for="sl">Stop loss</label><input id="sl" type="number" step="any" inputmode="decimal"></div>
+          </div>
+          <div class="row">
+            <div><label for="tp">Take profit</label><input id="tp" type="number" step="any" inputmode="decimal"></div>
+            <div><label for="pnl">Result in $ (use − for a loss)</label><input id="pnl" type="number" step="any" inputmode="decimal" required placeholder="25.50"></div>
+          </div>
+          <div class="rr" id="rr"></div>
+          <label for="risk">Amount risked in $ (what you lose if the stop is hit)</label><input id="risk" type="number" step="any" min="0" inputmode="decimal" placeholder="10">
+          <div class="rr" id="rres"></div>
+          <label for="shot">TradingView screenshot</label><input id="shot" type="file" accept="image/*">
+          <label for="analysis">Market analysis</label><textarea id="analysis" placeholder="Higher timeframe trend, key levels…"></textarea>
+          <label for="why">Why I took this trade</label><textarea id="why"></textarea>
+          <div class="row">
+            <div><label for="plan">Followed my plan?</label><select id="plan"><option>Yes</option><option>No</option></select></div>
+            <div><label for="feel">How I felt</label><select id="feel"><option>Calm</option><option>Confident</option><option>Anxious</option><option>Rushed</option><option>Frustrated</option><option>Greedy</option></select></div>
+          </div>
+          <label for="lesson">Lesson learned</label><textarea id="lesson"></textarea>
+          <button class="primary" id="saveBtn" type="submit">Save trade</button>
+          <button class="small" id="cancelEdit" type="button" style="margin-top:8px" hidden>Cancel edit</button>
+          <div class="msg" id="msg" role="status"></div>
+        </form>
+      </section>
+
+      <section>
+        <div class="tools">
+          <select id="filter" aria-label="Filter trades"><option value="all">All trades</option><option value="win">Wins</option><option value="loss">Losses</option></select>
+          <button class="small" id="csv" type="button">Download CSV</button>
+          <button class="small" id="out" type="button" hidden>Sign out</button>
+        </div>
+        <div id="list"></div>
+        <p style="margin-top:20px"><button class="owner-link" id="showSignin" type="button">Owner sign in</button></p>
+        <form id="signin" class="panel" hidden>
+          <h2>Owner sign in</h2>
+          <label for="em">Email</label><input id="em" type="email" autocomplete="username" required>
+          <label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password" required>
+          <button class="primary" type="submit">Sign in</button>
+          <div class="msg neg" id="smsg" role="status"></div>
+        </form>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+// 1. Paste your Supabase values here (Project settings > API). The anon key is safe to be public.
+const SUPABASE_URL = 'https://rztaxktzfhgcpvxtozog.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_Fj-E9GZSTlHpI-nFhJiDog_0tsSltht';
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const money = n => (n < 0 ? '−$' : '+$') + Math.abs(n).toFixed(2);
+const num = v => (v === '' || v == null || isNaN(parseFloat(v))) ? null : parseFloat(v);
+
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) { $('setup').hidden = false; }
+else { $('app').hidden = false; start(); }
+
+function start() {
+  const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  let trades = [], owner = false, shotBlob = null, pendingDelete = null, editing = null;
+  const imgUrl = p => sb.storage.from('screenshots').getPublicUrl(p).data.publicUrl;
+
+  function setNow() { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); $('date').value = d.toISOString().slice(0, 16); }
+  function planned(t) {
+    const e = t.entry, s = t.sl, p = t.tp;
+    if ([e, s, p].some(v => v == null) || e === s) return null;
+    return Math.abs(p - e) / Math.abs(e - s);
+  }
+  function showRR() {
+    const r = planned({ entry: num($('entry').value), sl: num($('sl').value), tp: num($('tp').value) });
+    $('rr').textContent = r == null ? '' : 'Planned risk to reward: 1:' + r.toFixed(2);
+  }
+  ['entry', 'sl', 'tp'].forEach(id => $(id).addEventListener('input', showRR));
+  const fr = v => v == null ? '–' : (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(2) + 'R';
+  function showR() {
+    const p = num($('pnl').value), k = num($('risk').value);
+    $('rres').textContent = (p == null || !(k > 0)) ? '' : 'This trade: ' + fr(p / k);
+  }
+  ['pnl', 'risk'].forEach(id => $(id).addEventListener('input', showR));
+
+  async function load() {
+    const { data, error } = await sb.from('trades').select('*').order('traded_at', { ascending: false });
+    if (error) { $('list').innerHTML = '<div class="empty">Could not load trades. Check your Supabase URL, key and that setup.sql has been run.</div>'; return; }
+    trades = data.map(t => ({ ...t, pnl: Number(t.pnl), entry: num(t.entry), sl: num(t.sl), tp: num(t.tp), risk_amount: num(t.risk_amount) }));
+    render();
+  }
+  async function setOwner(session) {
+    owner = !!session;
+    $('ownerPane').hidden = !owner; $('out').hidden = !owner;
+    $('cols').classList.toggle('owner', owner);
+    $('showSignin').parentElement.hidden = owner; if (owner) $('signin').hidden = true;
+    $('sub').textContent = owner ? 'You are signed in. Visitors see a read-only view.' : 'Every trade, with the chart and the reasoning behind it. Read-only view.';
+    render();
+  }
+  sb.auth.onAuthStateChange((_e, session) => setOwner(session));
+  sb.auth.getSession().then(({ data }) => setOwner(data.session));
+
+  $('showSignin').addEventListener('click', () => { $('signin').hidden = false; $('em').focus(); });
+  $('signin').addEventListener('submit', async e => {
+    e.preventDefault();
+    const { error } = await sb.auth.signInWithPassword({ email: $('em').value, password: $('pw').value });
+    $('smsg').textContent = error ? 'Sign in failed. Check your email and password.' : '';
+    if (!error) $('pw').value = '';
+  });
+  $('out').addEventListener('click', () => sb.auth.signOut());
+
+  $('shot').addEventListener('change', e => {
+    const file = e.target.files[0]; shotBlob = null;
+    if (!file) return;
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, 1600 / img.width), c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      c.toBlob(b => { shotBlob = b; }, 'image/jpeg', 0.82);
+    };
+    img.src = URL.createObjectURL(file);
+  });
+
+  $('f').addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = $('saveBtn'); btn.disabled = true; $('msg').className = 'msg'; $('msg').textContent = 'Saving…';
+    try {
+      let image_path = editing ? editing.image_path : null;
+      const oldPath = editing ? editing.image_path : null;
+      if (shotBlob) {
+        image_path = crypto.randomUUID() + '.jpg';
+        const up = await sb.storage.from('screenshots').upload(image_path, shotBlob, { contentType: 'image/jpeg' });
+        if (up.error) throw up.error;
+      }
+      const payload = {
+        traded_at: new Date($('date').value).toISOString(), pair: $('pair').value.trim().toUpperCase(),
+        direction: $('dir').value, session: $('session').value, lots: num($('lots').value), risk_amount: num($('risk').value),
+        entry: num($('entry').value), sl: num($('sl').value), tp: num($('tp').value), pnl: num($('pnl').value),
+        analysis: $('analysis').value, why: $('why').value, plan_followed: $('plan').value === 'Yes',
+        feeling: $('feel').value, lesson: $('lesson').value, image_path, setup: $('setup').value || null
+      };
+      const q0 = sb.from('trades');
+      const { error } = editing ? await q0.update(payload).eq('id', editing.id) : await q0.insert(payload);
+      if (error) throw error;
+      if (editing && shotBlob && oldPath) await sb.storage.from('screenshots').remove([oldPath]);
+      cancelEdit(true);
+      $('f').reset(); shotBlob = null; $('pair').value = 'XAUUSD'; $('session').value = 'London'; setNow(); showRR(); showR();
+      $('msg').textContent = 'Saved.'; await load();
+    } catch (err) { $('msg').className = 'msg neg'; $('msg').textContent = 'Could not save: ' + (err.message || 'unknown error'); }
+    btn.disabled = false;
+  });
+
+  function render() {
+    const n = trades.length, wins = trades.filter(t => t.pnl > 0), losses = trades.filter(t => t.pnl < 0);
+    const net = trades.reduce((a, t) => a + t.pnl, 0);
+    const gw = wins.reduce((a, t) => a + t.pnl, 0), gl = Math.abs(losses.reduce((a, t) => a + t.pnl, 0));
+    const rt = trades.filter(t => t.risk_amount > 0).map(t => t.pnl / t.risk_amount);
+    const avg = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : null;
+    const ex = avg(rt), aw = avg(rt.filter(x => x > 0)), al = avg(rt.filter(x => x < 0));
+    $('stats').innerHTML =
+      '<div class="stat"><b>' + n + '</b><span>Trades</span></div>' +
+      '<div class="stat"><b>' + (n ? Math.round(wins.length / n * 100) + '%' : '–') + '</b><span>Win rate</span></div>' +
+      '<div class="stat"><b class="' + (net >= 0 ? 'pos' : 'neg') + '">' + (n ? money(net) : '–') + '</b><span>Net result</span></div>' +
+      '<div class="stat"><b>' + (gl ? (gw / gl).toFixed(2) : (gw ? '∞' : '–')) + '</b><span>Profit factor</span></div>' +
+      '<div class="stat"><b class="' + (ex == null ? '' : ex >= 0 ? 'pos' : 'neg') + '">' + fr(ex) + '</b><span>Expectancy per trade</span></div>' +
+      '<div class="stat"><b>' + rt.length + '</b><span>Trades with risk logged</span></div>' +
+      '<div class="stat"><b class="pos">' + fr(aw) + '</b><span>Average win</span></div>' +
+      '<div class="stat"><b class="neg">' + fr(al) + '</b><span>Average loss</span></div>';
+
+    const svg = $('chart');
+    if (!n) svg.innerHTML = '<text x="300" y="80" text-anchor="middle" fill="var(--mute)" font-size="14">The curve appears after the first trade</text>';
+    else {
+      let c = 0; const pts = [0];
+      [...trades].sort((a, b) => a.traded_at.localeCompare(b.traded_at)).forEach(t => { c += t.pnl; pts.push(c); });
+      const min = Math.min(...pts, 0), max = Math.max(...pts, 0), span = (max - min) || 1;
+      const x = i => 10 + i * (580 / Math.max(1, pts.length - 1)), y = v => 140 - ((v - min) / span) * 130;
+      const col = c >= 0 ? 'var(--win)' : 'var(--loss)';
+      svg.innerHTML = '<line x1="0" x2="600" y1="' + y(0) + '" y2="' + y(0) + '" stroke="var(--line)" stroke-dasharray="4 4"/><polyline points="' +
+        pts.map((v, i) => x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ') + '" fill="none" stroke="' + col + '" stroke-width="2.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/><circle cx="' + x(pts.length - 1) + '" cy="' + y(c) + '" r="4" fill="' + col + '"/>';
+    }
+
+    drawBreakdown();
+    const f = $('filter').value;
+    const list = trades.filter(t => f === 'all' || (f === 'win' ? t.pnl > 0 : t.pnl < 0));
+    if (!list.length) { $('list').innerHTML = '<div class="empty">No trades to show yet.</div>'; return; }
+    $('list').innerHTML = list.map(t => {
+      const cls = t.pnl > 0 ? 'win' : t.pnl < 0 ? 'loss' : 'be', r = planned(t), rm = t.risk_amount > 0 ? t.pnl / t.risk_amount : null;
+      const when = new Date(t.traded_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      const sec = (h, v) => v ? '<h3>' + h + '</h3><p>' + esc(v) + '</p>' : '';
+      const lv = [t.entry != null && 'Entry ' + t.entry, t.sl != null && 'SL ' + t.sl, t.tp != null && 'TP ' + t.tp, t.lots != null && t.lots + ' lots', t.risk_amount != null && 'Risked $' + t.risk_amount].filter(Boolean).join(', ');
+      return '<details class="trade ' + cls + '"><summary><div><div class="t1">' + esc(t.pair) + ' ' + esc(t.direction) + (t.setup ? '<span class="tag">' + esc(t.setup) + '</span>' : '') + '</div><div class="t2">' + esc(when) + ', ' + esc(t.session) + (r ? ', planned 1:' + r.toFixed(2) : '') + '</div></div><div style="text-align:right"><div class="pl ' + (t.pnl >= 0 ? 'pos' : 'neg') + '">' + money(t.pnl) + '</div>' + (rm != null ? '<div class="t2">' + fr(rm) + '</div>' : '') + '</div></summary><div class="body">' +
+        sec('Levels', lv) + sec('Market analysis', t.analysis) + sec('Why I took it', t.why) +
+        sec('Plan and feeling', 'Followed plan: ' + (t.plan_followed ? 'Yes' : 'No') + (t.feeling ? '. Felt ' + t.feeling.toLowerCase() + '.' : '')) + sec('Lesson learned', t.lesson) +
+        (t.image_path ? '<img loading="lazy" src="' + esc(imgUrl(t.image_path)) + '" alt="Chart screenshot for ' + esc(t.pair) + '">' : '') +
+        (owner ? '<div style="margin-top:12px;display:flex;gap:8px"><button class="small" data-edit="' + esc(t.id) + '">Edit trade</button><button class="small" data-del="' + esc(t.id) + '">' + (pendingDelete === t.id ? 'Tap again to delete' : 'Delete trade') + '</button></div>' : '') + '</div></details>';
+    }).join('');
+  }
+
+  $('list').addEventListener('click', async e => {
+    const eid = e.target.getAttribute && e.target.getAttribute('data-edit');
+    if (eid && owner) { e.preventDefault(); startEdit(trades.find(x => x.id === eid)); return; }
+    const id = e.target.getAttribute && e.target.getAttribute('data-del');
+    if (!id || !owner) return;
+    e.preventDefault();
+    if (pendingDelete !== id) { pendingDelete = id; render(); return; }
+    pendingDelete = null;
+    const t = trades.find(x => x.id === id);
+    const { error } = await sb.from('trades').delete().eq('id', id);
+    if (!error && t && t.image_path) await sb.storage.from('screenshots').remove([t.image_path]);
+    await load();
+  });
+  $('filter').addEventListener('change', render);
+  $('dim').addEventListener('change', render);
+
+  function startEdit(t) {
+    if (!t) return;
+    editing = t; shotBlob = null; $('shot').value = '';
+    const d = new Date(t.traded_at); d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    const set = (id, v) => { $(id).value = v == null ? '' : v; };
+    $('date').value = d.toISOString().slice(0, 16);
+    set('pair', t.pair); set('dir', t.direction); set('session', t.session); set('setup', t.setup);
+    set('lots', t.lots); set('entry', t.entry); set('sl', t.sl); set('tp', t.tp); set('pnl', t.pnl); set('risk', t.risk_amount);
+    set('analysis', t.analysis); set('why', t.why); set('plan', t.plan_followed ? 'Yes' : 'No'); set('feel', t.feeling); set('lesson', t.lesson);
+    $('saveBtn').textContent = 'Update trade'; $('cancelEdit').hidden = false;
+    $('msg').className = 'msg';
+    $('msg').textContent = t.image_path ? 'Editing. Pick a new screenshot only to replace the current one.' : 'Editing this trade.';
+    showRR(); showR(); $('ownerPane').scrollIntoView({ behavior: 'smooth' });
+  }
+  function cancelEdit(quiet) {
+    editing = null; shotBlob = null; $('shot').value = ''; $('f').reset();
+    $('pair').value = 'XAUUSD'; $('session').value = 'London'; $('setup').value = '';
+    $('saveBtn').textContent = 'Save trade'; $('cancelEdit').hidden = true;
+    if (!quiet) $('msg').textContent = '';
+    setNow(); showRR(); showR();
+  }
+  $('cancelEdit').addEventListener('click', () => cancelEdit(false));
+
+  const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  function drawBreakdown() {
+    const dim = $('dim').value, g = {};
+    trades.forEach(t => {
+      const k = dim === 'weekday' ? DAYS[(new Date(t.traded_at).getDay() + 6) % 7] : (t[dim] || (dim === 'setup' ? 'Untagged' : '–'));
+      (g[k] = g[k] || []).push(t);
+    });
+    const keys = Object.keys(g);
+    if (!keys.length) { $('bd').innerHTML = '<div class="empty">The breakdown appears after your first trade.</div>'; return; }
+    if (dim === 'weekday') keys.sort((a, b) => DAYS.indexOf(a) - DAYS.indexOf(b));
+    else if (dim === 'session') { const o = ['Asian', 'London', 'New York', 'Overlap']; keys.sort((a, b) => o.indexOf(a) - o.indexOf(b)); }
+    else keys.sort((a, b) => g[b].reduce((s, t) => s + t.pnl, 0) - g[a].reduce((s, t) => s + t.pnl, 0));
+    const label = { setup: 'Setup', pair: 'Pair', session: 'Session', weekday: 'Day' }[dim];
+    const rows = keys.map(k => {
+      const a = g[k], n = a.length, w = a.filter(t => t.pnl > 0).length, net = a.reduce((s, t) => s + t.pnl, 0);
+      const rs = a.filter(t => t.risk_amount > 0).map(t => t.pnl / t.risk_amount);
+      const ar = rs.length ? rs.reduce((s, x) => s + x, 0) / rs.length : null;
+      return '<tr><td>' + esc(k) + '</td><td class="' + (n < 5 ? 'small-n' : '') + '">' + n + '</td><td>' + Math.round(w / n * 100) + '%</td><td class="' + (net >= 0 ? 'pos' : 'neg') + '">' + money(net) + '</td><td class="' + (ar == null ? '' : ar >= 0 ? 'pos' : 'neg') + '">' + fr(ar) + '</td></tr>';
+    }).join('');
+    $('bd').innerHTML = '<table><thead><tr><th>' + label + '</th><th>Trades</th><th>Win rate</th><th>Net</th><th>Avg R</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+  $('csv').addEventListener('click', () => {
+    const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const head = ['date', 'pair', 'direction', 'session', 'setup', 'lots', 'entry', 'sl', 'tp', 'result', 'risk', 'r_multiple', 'followed_plan', 'feeling'];
+    const rows = [...trades].reverse().map(t => [t.traded_at, t.pair, t.direction, t.session, t.setup, t.lots, t.entry, t.sl, t.tp, t.pnl, t.risk_amount, t.risk_amount > 0 ? (t.pnl / t.risk_amount).toFixed(2) : '', t.plan_followed ? 'Yes' : 'No', t.feeling].map(q).join(','));
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([[head.join(','), ...rows].join('\n')], { type: 'text/csv' }));
+    a.download = 'trading-journal.csv'; a.click();
+  });
+
+  // TradingView Technical Analysis widget (free embed, no API key)
+  const dark = window.matchMedia('(prefers-color-scheme: dark)');
+  function loadTrend() {
+    const box = $('trendBox'); box.innerHTML = '';
+    const wrap = document.createElement('div'); wrap.className = 'tradingview-widget-container';
+    const w = document.createElement('div'); w.className = 'tradingview-widget-container__widget'; wrap.appendChild(w);
+    const s = document.createElement('script');
+    s.src = 'https://s3.tradingview.com/external-embedding/embed-widget-technical-analysis.js';
+    s.async = true;
+    s.text = JSON.stringify({ interval: '1h', width: '100%', height: 420, isTransparent: true, symbol: $('sym').value, showIntervalTabs: true, displayMode: 'single', locale: 'en', colorTheme: dark.matches ? 'dark' : 'light' });
+    wrap.appendChild(s); box.appendChild(wrap);
+  }
+  $('sym').addEventListener('change', loadTrend);
+  if (dark.addEventListener) dark.addEventListener('change', loadTrend);
+
+  // Your fixed list of setups. Edit these names to suit your strategy.
+  const SETUPS = ['Breakout', 'Retest', 'Trend pullback', 'Reversal', 'News spike', 'Range play', 'Other'];
+  $('setup').innerHTML = '<option value="">No tag</option>' + SETUPS.map(s => '<option>' + esc(s) + '</option>').join('');
+
+  setNow(); showRR(); load(); loadTrend();
+}
+</script>
+</body>
+</html>
