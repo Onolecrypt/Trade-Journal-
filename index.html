@@ -1,4 +1,3 @@
-
 <!doctype html>
 <html lang="en">
 <head>
@@ -92,6 +91,12 @@ th{color:var(--mute);font-weight:600;font-size:13px}
     </section>
 
     <section class="panel trend">
+      <h2>Expectancy</h2>
+      <div id="exp"></div>
+      <p class="note">Formula: (1 + average win ÷ average loss) × win rate − 1. Above zero means a positive edge so far.</p>
+    </section>
+
+    <section class="panel trend">
       <div class="trend-head">
         <h2>Market trend</h2>
         <select id="sym" aria-label="Choose market">
@@ -120,6 +125,11 @@ th{color:var(--mute);font-weight:600;font-size:13px}
       </div>
       <div class="scroll" id="bd"></div>
       <p class="note">Groups with fewer than 5 trades are too small to trust yet.</p>
+    </section>
+
+    <section class="panel trend">
+      <h2>Mistakes</h2>
+      <div id="mkStats"></div>
     </section>
 
     <div class="cols" id="cols">
@@ -156,6 +166,7 @@ th{color:var(--mute);font-weight:600;font-size:13px}
             <div><label for="plan">Followed my plan?</label><select id="plan"><option>Yes</option><option>No</option></select></div>
             <div><label for="feel">How I felt</label><select id="feel"><option>Calm</option><option>Confident</option><option>Anxious</option><option>Rushed</option><option>Frustrated</option><option>Greedy</option></select></div>
           </div>
+          <fieldset class="chk" style="margin-top:12px"><legend>Mistakes</legend><div id="mistakes"></div><p class="cnt" id="mkCount"></p></fieldset>
           <label for="lesson">Lesson learned</label><textarea id="lesson"></textarea>
           <button class="primary" id="saveBtn" type="submit">Save trade</button>
           <button class="small" id="cancelEdit" type="button" style="margin-top:8px" hidden>Cancel edit</button>
@@ -204,6 +215,17 @@ const CHECKS = [
   'It matches one of my setups',
   'No major news in the next 30 minutes',
   'I am calm, not chasing a loss'
+];
+// 4. Your mistake list. Tick any that happened on a trade. Edit the wording freely.
+const MISTAKES = [
+  'Moved my stop loss',
+  'Exited too early',
+  'Held a loser too long',
+  'Oversized the position',
+  'Chased the entry',
+  'Revenge trade',
+  'Traded without a setup',
+  'Ignored the news'
 ];
 
 const $ = id => document.getElementById(id);
@@ -293,7 +315,7 @@ function start() {
         direction: $('dir').value, session: $('session').value, lots: num($('lots').value), risk_amount: num($('risk').value),
         entry: num($('entry').value), sl: num($('sl').value), tp: num($('tp').value), pnl: num($('pnl').value),
         analysis: $('analysis').value, why: $('why').value, plan_followed: $('plan').value === 'Yes',
-        feeling: $('feel').value, lesson: $('lesson').value, image_path, setup: $('setupTag').value || null, checklist_ok: CHECKS.every((_, i) => $('chk' + i).checked)
+        feeling: $('feel').value, lesson: $('lesson').value, image_path, setup: $('setupTag').value || null, checklist_ok: CHECKS.every((_, i) => $('chk' + i).checked), mistakes: MISTAKES.filter((_, i) => $('mk' + i).checked)
       };
       const q0 = sb.from('trades');
       const { error } = editing ? await q0.update(payload).eq('id', editing.id) : await q0.insert(payload);
@@ -335,7 +357,7 @@ function start() {
         pts.map((v, i) => x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ') + '" fill="none" stroke="' + col + '" stroke-width="2.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/><circle cx="' + x(pts.length - 1) + '" cy="' + y(c) + '" r="4" fill="' + col + '"/>';
     }
 
-    drawBreakdown(); drawGuard();
+    drawBreakdown(); drawGuard(); drawExpectancy(); drawMistakes();
     const f = $('filter').value;
     const list = trades.filter(t => f === 'all' || (f === 'win' ? t.pnl > 0 : t.pnl < 0));
     if (!list.length) { $('list').innerHTML = '<div class="empty">No trades to show yet.</div>'; return; }
@@ -344,9 +366,9 @@ function start() {
       const when = new Date(t.traded_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
       const sec = (h, v) => v ? '<h3>' + h + '</h3><p>' + esc(v) + '</p>' : '';
       const lv = [t.entry != null && 'Entry ' + t.entry, t.sl != null && 'SL ' + t.sl, t.tp != null && 'TP ' + t.tp, t.lots != null && t.lots + ' lots', t.risk_amount != null && 'Risked $' + t.risk_amount].filter(Boolean).join(', ');
-      return '<details class="trade ' + cls + '"><summary><div><div class="t1">' + esc(t.pair) + ' ' + esc(t.direction) + (t.setup ? '<span class="tag">' + esc(t.setup) + '</span>' : '') + (t._quick ? '<span class="tag">Quick re-entry</span>' : '') + (t.checklist_ok === false ? '<span class="tag">Skipped checklist</span>' : '') + '</div><div class="t2">' + esc(when) + ', ' + esc(t.session) + (r ? ', planned 1:' + r.toFixed(2) : '') + '</div></div><div style="text-align:right"><div class="pl ' + (t.pnl >= 0 ? 'pos' : 'neg') + '">' + money(t.pnl) + '</div>' + (rm != null ? '<div class="t2">' + fr(rm) + '</div>' : '') + '</div></summary><div class="body">' +
+      return '<details class="trade ' + cls + '"><summary><div><div class="t1">' + esc(t.pair) + ' ' + esc(t.direction) + (t.setup ? '<span class="tag">' + esc(t.setup) + '</span>' : '') + (t._quick ? '<span class="tag">Quick re-entry</span>' : '') + (t.checklist_ok === false ? '<span class="tag">Skipped checklist</span>' : '') + (t.mistakes && t.mistakes.length ? '<span class="tag">' + t.mistakes.length + (t.mistakes.length === 1 ? ' mistake' : ' mistakes') + '</span>' : '') + '</div><div class="t2">' + esc(when) + ', ' + esc(t.session) + (r ? ', planned 1:' + r.toFixed(2) : '') + '</div></div><div style="text-align:right"><div class="pl ' + (t.pnl >= 0 ? 'pos' : 'neg') + '">' + money(t.pnl) + '</div>' + (rm != null ? '<div class="t2">' + fr(rm) + '</div>' : '') + '</div></summary><div class="body">' +
         sec('Levels', lv) + sec('Market analysis', t.analysis) + sec('Why I took it', t.why) +
-        sec('Plan and feeling', 'Followed plan: ' + (t.plan_followed ? 'Yes' : 'No') + (t.feeling ? '. Felt ' + t.feeling.toLowerCase() + '.' : '')) + sec('Lesson learned', t.lesson) +
+        sec('Plan and feeling', 'Followed plan: ' + (t.plan_followed ? 'Yes' : 'No') + (t.feeling ? '. Felt ' + t.feeling.toLowerCase() + '.' : '')) + sec('Mistakes', t.mistakes && t.mistakes.length ? t.mistakes.join(', ') : '') + sec('Lesson learned', t.lesson) +
         (t.image_path ? '<img loading="lazy" src="' + esc(imgUrl(t.image_path)) + '" alt="Chart screenshot for ' + esc(t.pair) + '">' : '') +
         (owner ? '<div style="margin-top:12px;display:flex;gap:8px"><button class="small" data-edit="' + esc(t.id) + '">Edit trade</button><button class="small" data-del="' + esc(t.id) + '">' + (pendingDelete === t.id ? 'Tap again to delete' : 'Delete trade') + '</button></div>' : '') + '</div></details>';
     }).join('');
@@ -379,6 +401,49 @@ function start() {
     $('pairOther').hidden = !o; $('pairOther').required = o;
     if (o) $('pairOther').focus();
   });
+
+  function drawExpectancy() {
+    const el = $('exp'); if (!el) return;
+    const wins = trades.filter(t => t.pnl > 0), losses = trades.filter(t => t.pnl < 0), d = wins.length + losses.length;
+    if (!wins.length || !losses.length) { el.innerHTML = '<div class="empty">Needs at least one winning and one losing trade to calculate.</div>'; return; }
+    const W = wins.reduce((s, t) => s + t.pnl, 0) / wins.length;
+    const L = Math.abs(losses.reduce((s, t) => s + t.pnl, 0)) / losses.length;
+    const P = wins.length / d, payoff = W / L, ex = (1 + payoff) * P - 1, be = 1 / (1 + payoff);
+    const card = (v, l, c) => '<div class="stat"><b' + (c ? ' class="' + c + '"' : '') + '>' + v + '</b><span>' + l + '</span></div>';
+    const p = Math.round(P * 100), b = Math.round(be * 100);
+    const verdict = ex > 0
+      ? 'Positive so far. Your win rate of ' + p + '% is above the ' + b + '% you need to break even at this win and loss size. On average you make about ' + money(ex * L) + ' per trade.'
+      : 'Not positive yet. Your win rate of ' + p + '% is below the ' + b + '% you need to break even at this win and loss size. Either win more often, or let winners run further compared with your losers.';
+    const caution = d < 30 ? ' Only ' + d + ' trades so far, so treat this as an early signal and aim for 30 or more before trusting it.' : ' Based on ' + d + ' trades.';
+    el.innerHTML = '<div class="stats" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr))">' +
+      card(p + '%', 'Win rate') + card(b + '%', 'Break-even win rate') + card(payoff.toFixed(2), 'Payoff ratio (avg win ÷ avg loss)') +
+      card((ex > 0 ? '+' : ex < 0 ? '−' : '') + Math.abs(ex).toFixed(2), 'Expectancy', ex >= 0 ? 'pos' : 'neg') +
+      card(money(W), 'Average win', 'pos') + card(money(-L), 'Average loss', 'neg') + '</div>' +
+      '<p style="margin:12px 0 0">' + esc(verdict + caution) + '</p>';
+  }
+
+  function showMistakes() {
+    const n = MISTAKES.filter((_, i) => $('mk' + i).checked).length;
+    $('mkCount').textContent = n ? n + ' ticked.' : 'None ticked means a clean trade.';
+  }
+  function drawMistakes() {
+    const el = $('mkStats'); if (!el) return;
+    const rec = trades.filter(t => Array.isArray(t.mistakes));
+    if (!rec.length) { el.innerHTML = '<div class="empty">Tick any mistakes when you log a trade, and your costliest habits will show here.</div>'; return; }
+    const bad = rec.filter(t => t.mistakes.length), clean = rec.filter(t => !t.mistakes.length);
+    const net = a => a.reduce((s, t) => s + t.pnl, 0);
+    const wr = a => a.length ? Math.round(a.filter(t => t.pnl > 0).length / a.length * 100) + '%' : '–';
+    const cls = v => v >= 0 ? 'pos' : 'neg';
+    const g = {};
+    bad.forEach(t => t.mistakes.forEach(m => (g[m] = g[m] || []).push(t)));
+    const keys = Object.keys(g).sort((a, b) => net(g[a]) - net(g[b]));
+    const row = (name, a) => '<tr><td>' + esc(name) + '</td><td' + (a.length < 5 ? ' class="small-n"' : '') + '>' + a.length + '</td><td>' + wr(a) + '</td><td class="' + cls(net(a)) + '">' + money(net(a)) + '</td></tr>';
+    let head = '';
+    if (keys.length && net(g[keys[0]]) < 0) head = '<p style="margin:0 0 12px">Your costliest habit so far is <b style="display:inline">' + esc(keys[0]) + '</b>: ' + money(net(g[keys[0]])) + ' across ' + g[keys[0]].length + (g[keys[0]].length === 1 ? ' trade.' : ' trades.') + '</p>';
+    el.innerHTML = head +
+      '<div class="scroll"><table><thead><tr><th>Trades</th><th>Count</th><th>Win rate</th><th>Net</th></tr></thead><tbody>' + row('Clean', clean) + row('With mistakes', bad) + '</tbody></table></div>' +
+      (keys.length ? '<div class="scroll" style="margin-top:12px"><table><thead><tr><th>Mistake</th><th>Times</th><th>Win rate</th><th>Net</th></tr></thead><tbody>' + keys.map(k => row(k, g[k])).join('') + '</tbody></table></div><p class="note">Costliest first. A trade with several mistakes appears in each row. Only trades where you recorded mistakes are counted.</p>' : '');
+  }
 
   function showChecks() {
     const n = CHECKS.filter((_, i) => $('chk' + i).checked).length;
@@ -428,17 +493,18 @@ function start() {
     set('lots', t.lots); set('entry', t.entry); set('sl', t.sl); set('tp', t.tp); set('pnl', t.pnl); set('risk', t.risk_amount);
     set('analysis', t.analysis); set('why', t.why); set('plan', t.plan_followed ? 'Yes' : 'No'); set('feel', t.feeling); set('lesson', t.lesson);
     CHECKS.forEach((_, i) => { $('chk' + i).checked = t.checklist_ok === true; });
+    MISTAKES.forEach((m, i) => { $('mk' + i).checked = !!(t.mistakes && t.mistakes.includes(m)); });
     $('saveBtn').textContent = 'Update trade'; $('cancelEdit').hidden = false;
     $('msg').className = 'msg';
     $('msg').textContent = t.image_path ? 'Editing. Pick a new screenshot only to replace the current one.' : 'Editing this trade.';
-    showRR(); showR(); showChecks(); $('ownerPane').scrollIntoView({ behavior: 'smooth' });
+    showRR(); showR(); showChecks(); showMistakes(); $('ownerPane').scrollIntoView({ behavior: 'smooth' });
   }
   function cancelEdit(quiet) {
     editing = null; shotBlob = null; $('shot').value = ''; $('f').reset();
     setPair('XAUUSD'); $('session').value = 'London'; $('setupTag').value = '';
     $('saveBtn').textContent = 'Save trade'; $('cancelEdit').hidden = true;
     if (!quiet) $('msg').textContent = '';
-    setNow(); showRR(); showR(); showChecks();
+    setNow(); showRR(); showR(); showChecks(); showMistakes();
   }
   $('cancelEdit').addEventListener('click', () => cancelEdit(false));
 
@@ -465,8 +531,8 @@ function start() {
   }
   $('csv').addEventListener('click', () => {
     const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
-    const head = ['date', 'pair', 'direction', 'session', 'setup', 'lots', 'entry', 'sl', 'tp', 'result', 'risk', 'r_multiple', 'followed_plan', 'checklist_done', 'feeling'];
-    const rows = [...trades].reverse().map(t => [t.traded_at, t.pair, t.direction, t.session, t.setup, t.lots, t.entry, t.sl, t.tp, t.pnl, t.risk_amount, t.risk_amount > 0 ? (t.pnl / t.risk_amount).toFixed(2) : '', t.plan_followed ? 'Yes' : 'No', t.checklist_ok == null ? '' : (t.checklist_ok ? 'Yes' : 'No'), t.feeling].map(q).join(','));
+    const head = ['date', 'pair', 'direction', 'session', 'setup', 'lots', 'entry', 'sl', 'tp', 'result', 'risk', 'r_multiple', 'followed_plan', 'checklist_done', 'mistakes', 'feeling'];
+    const rows = [...trades].reverse().map(t => [t.traded_at, t.pair, t.direction, t.session, t.setup, t.lots, t.entry, t.sl, t.tp, t.pnl, t.risk_amount, t.risk_amount > 0 ? (t.pnl / t.risk_amount).toFixed(2) : '', t.plan_followed ? 'Yes' : 'No', t.checklist_ok == null ? '' : (t.checklist_ok ? 'Yes' : 'No'), Array.isArray(t.mistakes) ? t.mistakes.join('; ') : '', t.feeling].map(q).join(','));
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([[head.join(','), ...rows].join('\n')], { type: 'text/csv' }));
     a.download = 'trading-journal.csv'; a.click();
@@ -493,10 +559,13 @@ function start() {
 
   $('checks').innerHTML = CHECKS.map((c, i) => '<label><input type="checkbox" id="chk' + i + '"> ' + esc(c) + '</label>').join('');
   $('checks').addEventListener('change', showChecks);
-  showChecks(); setInterval(drawGuard, 30000);
+  $('mistakes').innerHTML = MISTAKES.map((c, i) => '<label><input type="checkbox" id="mk' + i + '"> ' + esc(c) + '</label>').join('');
+  $('mistakes').addEventListener('change', showMistakes);
+  showChecks(); showMistakes(); setInterval(drawGuard, 30000);
 
   setNow(); showRR(); load(); loadTrend();
 }
 </script>
 </body>
 </html>
+
