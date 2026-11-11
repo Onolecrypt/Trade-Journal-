@@ -63,6 +63,15 @@ th{color:var(--mute);font-weight:600;font-size:13px}
 .chk label{display:flex;align-items:center;gap:10px;margin:0;padding:8px 0;color:var(--ink);font-size:15px}
 .chk input{width:22px;height:22px;min-height:0;flex:none;accent-color:var(--win)}
 .chk .cnt{color:var(--mute);font-size:13px;margin:0 0 6px}
+.sum{display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer;list-style:none}
+.sum::-webkit-details-marker{display:none}
+.sum h2{margin:0}
+.sum .note{margin:0}
+.wk-nav{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:12px 0;flex-wrap:wrap}
+.wk-nav b{flex:1;text-align:center;min-width:150px}
+.hl{margin:6px 0 0;padding-left:18px}
+.hl li{margin:4px 0}
+.prev-focus{border:1px dashed var(--line);border-radius:8px;padding:10px 12px;margin:12px 0;color:var(--mute);font-size:14px}
 .trend{margin-bottom:20px}
 .trend-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
 .trend-head h2{margin:0}
@@ -131,6 +140,27 @@ th{color:var(--mute);font-weight:600;font-size:13px}
       <h2>Mistakes</h2>
       <div id="mkStats"></div>
     </section>
+
+    <details class="panel trend" id="wkPanel">
+      <summary class="sum"><h2>Weekly review</h2><span class="note" id="wkLabel"></span></summary>
+      <div class="wk-nav">
+        <button class="small" id="wkPrev" type="button">‹ Prev</button>
+        <b id="wkRange"></b>
+        <button class="small" id="wkNext" type="button">Next ›</button>
+        <button class="small" id="wkNow" type="button">This week</button>
+      </div>
+      <div id="wkBody"></div>
+      <div id="wkNotes" hidden>
+        <h2 style="margin-top:18px">Your review</h2>
+        <div class="prev-focus" id="prevFocus" hidden></div>
+        <label for="wkWell">What went well</label><textarea id="wkWell"></textarea>
+        <label for="wkImprove">What to improve</label><textarea id="wkImprove"></textarea>
+        <label for="wkFocus">My focus for next week</label><textarea id="wkFocus"></textarea>
+        <button class="primary" id="wkSave" type="button">Save review</button>
+        <div class="msg" id="wkMsg" role="status"></div>
+        <p class="note" style="text-align:left">Your written review is private. Only you can see it when signed in.</p>
+      </div>
+    </details>
 
     <div class="cols" id="cols">
       <section class="panel" id="ownerPane" hidden>
@@ -232,13 +262,15 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money = n => (n < 0 ? '−$' : '+$') + Math.abs(n).toFixed(2);
 const num = v => (v === '' || v == null || isNaN(parseFloat(v))) ? null : parseFloat(v);
+function mondayOf(d) { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; }
+const ymd = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) { $('setup').hidden = false; }
 else { $('app').hidden = false; start(); }
 
 function start() {
   const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-  let trades = [], owner = false, shotBlob = null, pendingDelete = null, editing = null;
+  let trades = [], owner = false, shotBlob = null, pendingDelete = null, editing = null, wkStart = mondayOf(new Date()), reviews = {}, reviewsErr = '';
   const imgUrl = p => sb.storage.from('screenshots').getPublicUrl(p).data.publicUrl;
 
   function setNow() { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); $('date').value = d.toISOString().slice(0, 16); }
@@ -267,7 +299,7 @@ function start() {
     render();
   }
   async function setOwner(session) {
-    owner = !!session;
+    owner = !!session; $('wkNotes').hidden = !owner; loadReviews();
     $('ownerPane').hidden = !owner; $('out').hidden = !owner;
     $('cols').classList.toggle('owner', owner);
     $('showSignin').parentElement.hidden = owner; if (owner) $('signin').hidden = true;
@@ -357,7 +389,7 @@ function start() {
         pts.map((v, i) => x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ') + '" fill="none" stroke="' + col + '" stroke-width="2.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/><circle cx="' + x(pts.length - 1) + '" cy="' + y(c) + '" r="4" fill="' + col + '"/>';
     }
 
-    drawBreakdown(); drawGuard(); drawExpectancy(); drawMistakes();
+    drawBreakdown(); drawGuard(); drawExpectancy(); drawMistakes(); drawWeek();
     const f = $('filter').value;
     const list = trades.filter(t => f === 'all' || (f === 'win' ? t.pnl > 0 : t.pnl < 0));
     if (!list.length) { $('list').innerHTML = '<div class="empty">No trades to show yet.</div>'; return; }
@@ -443,6 +475,86 @@ function start() {
     el.innerHTML = head +
       '<div class="scroll"><table><thead><tr><th>Trades</th><th>Count</th><th>Win rate</th><th>Net</th></tr></thead><tbody>' + row('Clean', clean) + row('With mistakes', bad) + '</tbody></table></div>' +
       (keys.length ? '<div class="scroll" style="margin-top:12px"><table><thead><tr><th>Mistake</th><th>Times</th><th>Win rate</th><th>Net</th></tr></thead><tbody>' + keys.map(k => row(k, g[k])).join('') + '</tbody></table></div><p class="note">Costliest first. A trade with several mistakes appears in each row. Only trades where you recorded mistakes are counted.</p>' : '');
+  }
+
+  async function loadReviews() {
+    reviews = {}; reviewsErr = '';
+    if (owner) {
+      const { data, error } = await sb.from('weekly_reviews').select('*');
+      if (error) reviewsErr = 'Review notes are not set up yet. Run migration-5-weekly.sql in Supabase.';
+      else (data || []).forEach(r => { reviews[r.week_start] = r; });
+    }
+    fillNotes();
+  }
+  function fillNotes() {
+    if (!owner) return;
+    const prev = new Date(wkStart); prev.setDate(prev.getDate() - 7);
+    const r = reviews[ymd(wkStart)] || {}, p = reviews[ymd(prev)] || {};
+    $('wkWell').value = r.went_well || ''; $('wkImprove').value = r.to_improve || ''; $('wkFocus').value = r.next_week || '';
+    $('prevFocus').hidden = !p.next_week;
+    if (p.next_week) $('prevFocus').textContent = 'Your focus from last week: ' + p.next_week;
+    $('wkMsg').className = 'msg neg'; $('wkMsg').textContent = reviewsErr;
+  }
+  function drawWeek() {
+    const end = new Date(wkStart); end.setDate(end.getDate() + 7);
+    const prevStart = new Date(wkStart); prevStart.setDate(prevStart.getDate() - 7);
+    const inR = (t, a, b) => { const d = new Date(t.traded_at); return d >= a && d < b; };
+    const wk = trades.filter(t => inR(t, wkStart, end)), pv = trades.filter(t => inR(t, prevStart, wkStart));
+    const net = a => a.reduce((s, t) => s + t.pnl, 0);
+    const wr = a => a.length ? Math.round(a.filter(t => t.pnl > 0).length / a.length * 100) + '%' : '–';
+    const fmt = d => d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    const lastDay = new Date(end); lastDay.setDate(lastDay.getDate() - 1);
+    const thisWeek = wkStart.getTime() === mondayOf(new Date()).getTime();
+    $('wkRange').textContent = fmt(wkStart) + ' – ' + fmt(lastDay) + (thisWeek ? ' (this week)' : '');
+    $('wkNext').disabled = wkStart.getTime() >= mondayOf(new Date()).getTime();
+    $('wkLabel').textContent = wk.length ? wk.length + (wk.length === 1 ? ' trade, ' : ' trades, ') + money(net(wk)) : 'No trades';
+    if (!wk.length) { $('wkBody').innerHTML = '<div class="empty">No trades logged this week.</div>'; return; }
+
+    const rs = wk.filter(t => t.risk_amount > 0).map(t => t.pnl / t.risk_amount);
+    const avgR = rs.length ? rs.reduce((s, x) => s + x, 0) / rs.length : null;
+    const card = (v, l, c) => '<div class="stat"><b' + (c ? ' class="' + c + '"' : '') + '>' + v + '</b><span>' + l + '</span></div>';
+    const cards = '<div class="stats" style="grid-template-columns:repeat(auto-fit,minmax(120px,1fr))">' +
+      card(wk.length, 'Trades') + card(wr(wk), 'Win rate') + card(money(net(wk)), 'Net result', net(wk) >= 0 ? 'pos' : 'neg') + card(fr(avgR), 'Average R', avgR == null ? '' : avgR >= 0 ? 'pos' : 'neg') + '</div>';
+    const vs = pv.length ? '<p class="note" style="text-align:left;margin-top:10px">Last week: ' + pv.length + (pv.length === 1 ? ' trade, ' : ' trades, ') + wr(pv) + ' win rate, net ' + money(net(pv)) + '.</p>' : '';
+
+    const days = [0, 0, 0, 0, 0, 0, 0], cnt = [0, 0, 0, 0, 0, 0, 0];
+    wk.forEach(t => { const i = (new Date(t.traded_at).getDay() + 6) % 7; days[i] += t.pnl; cnt[i]++; });
+    const mx = Math.max(1, ...days.map(Math.abs));
+    const bars = days.map((v, i) => {
+      const h = Math.abs(v) / mx * 40, x = 8 + i * 38, y = v >= 0 ? 50 - h : 50;
+      return '<rect x="' + x + '" y="' + y + '" width="28" height="' + (v ? Math.max(h, 1) : 0) + '" rx="3" fill="' + (v >= 0 ? 'var(--win)' : 'var(--loss)') + '"><title>' + DAYS[i] + ' ' + money(v) + '</title></rect><text x="' + (x + 14) + '" y="106" text-anchor="middle" font-size="11" fill="var(--mute)">' + DAYS[i].slice(0, 3) + '</text>';
+    }).join('');
+    const chart = '<div class="scroll" style="margin-top:12px"><svg viewBox="0 0 280 112" style="width:100%;max-width:420px;display:block;margin:0 auto" role="img" aria-label="Net result per day"><line x1="0" x2="280" y1="50" y2="50" stroke="var(--line)"/>' + bars + '</svg></div>';
+
+    const hl = [], pl = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+    const desc = t => t.pair + ' ' + t.direction + (t.setup ? ' (' + t.setup + ')' : '') + ', ' + money(t.pnl);
+    const sorted = [...wk].sort((a, b) => b.pnl - a.pnl);
+    if (sorted[0].pnl > 0) hl.push('Best trade: ' + desc(sorted[0]));
+    const worst = sorted[sorted.length - 1]; if (worst.pnl < 0) hl.push('Worst trade: ' + desc(worst));
+    const used = days.map((v, i) => ({ v, i })).filter(x => cnt[x.i]);
+    if (used.length > 1) {
+      const bd = used.reduce((a, b) => b.v > a.v ? b : a), wd = used.reduce((a, b) => b.v < a.v ? b : a);
+      if (bd.v > 0) hl.push('Best day: ' + DAYS[bd.i] + ', ' + money(bd.v));
+      if (wd.v < 0) hl.push('Toughest day: ' + DAYS[wd.i] + ', ' + money(wd.v));
+    }
+    const sg = {}; wk.filter(t => t.setup).forEach(t => (sg[t.setup] = sg[t.setup] || []).push(t));
+    const sk = Object.keys(sg).sort((a, b) => net(sg[b]) - net(sg[a]));
+    if (sk.length) {
+      hl.push('Best setup: ' + sk[0] + ', ' + money(net(sg[sk[0]])) + ' from ' + pl(sg[sk[0]].length, 'trade'));
+      const w = sk[sk.length - 1]; if (sk.length > 1 && net(sg[w]) < 0) hl.push('Weakest setup: ' + w + ', ' + money(net(sg[w])) + ' from ' + pl(sg[w].length, 'trade'));
+    }
+    const mg = {}; wk.forEach(t => (t.mistakes || []).forEach(m => (mg[m] = mg[m] || []).push(t)));
+    const mk = Object.keys(mg).sort((a, b) => net(mg[a]) - net(mg[b]));
+    if (mk.length && net(mg[mk[0]]) < 0) hl.push('Costliest mistake: ' + mk[0] + ', ' + money(net(mg[mk[0]])) + ' across ' + pl(mg[mk[0]].length, 'trade'));
+    hl.push('Followed your plan on ' + wk.filter(t => t.plan_followed).length + ' of ' + wk.length + ' trades.');
+    const rec = wk.filter(t => t.checklist_ok != null);
+    if (rec.length) hl.push('Completed the checklist on ' + rec.filter(t => t.checklist_ok).length + ' of ' + rec.length + ' trades.');
+    const sk2 = wk.filter(t => t.checklist_ok === false);
+    if (sk2.length) hl.push('Trades with a skipped checklist: ' + sk2.length + ', net ' + money(net(sk2)) + '.');
+    const q = wk.filter(t => t._quick).length;
+    if (q) hl.push(pl(q, 'quick re-entry').replace('quick re-entrys', 'quick re-entries') + ' right after a loss.');
+
+    $('wkBody').innerHTML = cards + vs + chart + '<h2 style="margin:16px 0 0;font-size:16px">Highlights</h2><ul class="hl">' + hl.map(l => '<li>' + esc(l) + '</li>').join('') + '</ul>';
   }
 
   function showChecks() {
@@ -563,9 +675,21 @@ function start() {
   $('mistakes').addEventListener('change', showMistakes);
   showChecks(); showMistakes(); setInterval(drawGuard, 30000);
 
+  const moveWeek = d => { wkStart.setDate(wkStart.getDate() + d); drawWeek(); fillNotes(); };
+  $('wkPrev').addEventListener('click', () => moveWeek(-7));
+  $('wkNext').addEventListener('click', () => moveWeek(7));
+  $('wkNow').addEventListener('click', () => { wkStart = mondayOf(new Date()); drawWeek(); fillNotes(); });
+  $('wkSave').addEventListener('click', async () => {
+    const key = ymd(wkStart), msg = $('wkMsg');
+    msg.className = 'msg'; msg.textContent = 'Saving…';
+    const row = { week_start: key, went_well: $('wkWell').value, to_improve: $('wkImprove').value, next_week: $('wkFocus').value, updated_at: new Date().toISOString() };
+    const { error } = await sb.from('weekly_reviews').upsert(row, { onConflict: 'week_start' });
+    if (error) { msg.className = 'msg neg'; msg.textContent = 'Could not save: ' + error.message; return; }
+    reviews[key] = row; msg.textContent = 'Review saved.';
+  });
+
   setNow(); showRR(); load(); loadTrend();
 }
 </script>
 </body>
 </html>
-
