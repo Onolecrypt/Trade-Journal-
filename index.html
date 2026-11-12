@@ -72,6 +72,10 @@ th{color:var(--mute);font-weight:600;font-size:13px}
 .hl{margin:6px 0 0;padding-left:18px}
 .hl li{margin:4px 0}
 .prev-focus{border:1px dashed var(--line);border-radius:8px;padding:10px 12px;margin:12px 0;color:var(--mute);font-size:14px}
+.calc{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:12px}
+.calc summary b{font-weight:600}
+.chkline{display:flex;align-items:center;gap:10px;color:var(--ink);font-size:15px;margin:16px 0 0}
+.chkline input{width:22px;height:22px;min-height:0;flex:none;accent-color:var(--win)}
 .trend{margin-bottom:20px}
 .trend-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
 .trend-head h2{margin:0}
@@ -103,6 +107,11 @@ th{color:var(--mute);font-weight:600;font-size:13px}
       <h2>Expectancy</h2>
       <div id="exp"></div>
       <p class="note">Formula: (1 + average win ÷ average loss) × win rate − 1. Above zero means a positive edge so far.</p>
+    </section>
+
+    <section class="panel trend">
+      <h2>Drawdown and streaks</h2>
+      <div id="ddStats"></div>
     </section>
 
     <section class="panel trend">
@@ -166,6 +175,24 @@ th{color:var(--mute);font-weight:600;font-size:13px}
       <section class="panel" id="ownerPane" hidden>
         <h2>New trade</h2>
         <div class="guard ok" id="guard" role="status"></div>
+        <details class="calc" id="calc">
+          <summary class="sum"><b>Position size calculator</b><span class="note">Tap to open</span></summary>
+          <div class="row">
+            <div><label for="cBal">Account balance ($)</label><input id="cBal" type="number" step="any" inputmode="decimal"></div>
+            <div><label for="cRisk">Risk per trade (%)</label><input id="cRisk" type="number" step="any" inputmode="decimal" value="1"></div>
+          </div>
+          <div class="row">
+            <div><label for="cSym">Instrument</label><select id="cSym"><option>XAUUSD</option><option>EURUSD</option><option>GBPUSD</option><option>USDJPY</option><option value="custom">Custom</option></select></div>
+            <div id="cCustomWrap" hidden><label for="cCustom">$ per 1.00 move, per lot</label><input id="cCustom" type="number" step="any" inputmode="decimal"></div>
+          </div>
+          <div class="row">
+            <div><label for="cEntry">Entry</label><input id="cEntry" type="number" step="any" inputmode="decimal"></div>
+            <div><label for="cSl">Stop loss</label><input id="cSl" type="number" step="any" inputmode="decimal"></div>
+          </div>
+          <div class="rr" id="cOut" style="margin-top:10px"></div>
+          <button class="small" id="cUse" type="button" style="margin-top:8px" hidden>Use in trade form</button>
+          <p class="note" style="text-align:left">Assumes 100 oz per gold lot and 100,000 units per forex lot. Check the first result against your broker’s contract size.</p>
+        </details>
         <form id="f">
           <fieldset class="chk"><legend>Pre-trade checklist</legend><div id="checks"></div><p class="cnt" id="chkCount"></p></fieldset>
           <label for="date">Date and time</label><input id="date" type="datetime-local" required>
@@ -190,6 +217,8 @@ th{color:var(--mute);font-weight:600;font-size:13px}
           <label for="risk">Amount risked in $ (what you lose if the stop is hit)</label><input id="risk" type="number" step="any" min="0" inputmode="decimal" placeholder="10">
           <div class="rr" id="rres"></div>
           <label for="shot">TradingView screenshot</label><input id="shot" type="file" accept="image/*">
+          <label class="chkline"><input type="checkbox" id="notesPrivate"> Keep my written notes private</label>
+          <p class="rr" style="margin-top:4px">Analysis, reason and lesson are then stored where only you can read them. Feelings and mistakes stay visible because they feed your stats.</p>
           <label for="analysis">Market analysis</label><textarea id="analysis" placeholder="Higher timeframe trend, key levels…"></textarea>
           <label for="why">Why I took this trade</label><textarea id="why"></textarea>
           <div class="row">
@@ -237,6 +266,8 @@ const RULES = {
   cooldownMinutes: 15,      // breather after a loss
   quickReentryMinutes: 15   // flag a trade taken this soon after a loss
 };
+// Your starting account balance in $. Set it to see drawdown as a % of the account (0 = unknown).
+const START_BALANCE = 0;
 // 3. Your pre-trade checklist. Edit the wording or add and remove lines.
 const CHECKS = [
   'The trend agrees with my direction',
@@ -270,7 +301,7 @@ else { $('app').hidden = false; start(); }
 
 function start() {
   const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-  let trades = [], owner = false, shotBlob = null, pendingDelete = null, editing = null, wkStart = mondayOf(new Date()), reviews = {}, reviewsErr = '';
+  let trades = [], owner = false, shotBlob = null, pendingDelete = null, editing = null, wkStart = mondayOf(new Date()), reviews = {}, reviewsErr = '', privMap = {}, calcResult = null;
   const imgUrl = p => sb.storage.from('screenshots').getPublicUrl(p).data.publicUrl;
 
   function setNow() { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); $('date').value = d.toISOString().slice(0, 16); }
@@ -295,11 +326,12 @@ function start() {
     const { data, error } = await sb.from('trades').select('*').order('traded_at', { ascending: false });
     if (error) { $('list').innerHTML = '<div class="empty">Could not load trades. Check your Supabase URL, key and that setup.sql has been run.</div>'; return; }
     trades = data.map(t => ({ ...t, pnl: Number(t.pnl), entry: num(t.entry), sl: num(t.sl), tp: num(t.tp), risk_amount: num(t.risk_amount) }));
+    mergePrivate();
     markFlags();
     render();
   }
   async function setOwner(session) {
-    owner = !!session; $('wkNotes').hidden = !owner; loadReviews();
+    owner = !!session; $('wkNotes').hidden = !owner; loadReviews(); loadPrivate();
     $('ownerPane').hidden = !owner; $('out').hidden = !owner;
     $('cols').classList.toggle('owner', owner);
     $('showSignin').parentElement.hidden = owner; if (owner) $('signin').hidden = true;
@@ -342,16 +374,26 @@ function start() {
         const up = await sb.storage.from('screenshots').upload(image_path, shotBlob, { contentType: 'image/jpeg' });
         if (up.error) throw up.error;
       }
+      const priv = $('notesPrivate').checked;
+      const secret = { analysis: $('analysis').value, why: $('why').value, lesson: $('lesson').value };
       const payload = {
         traded_at: new Date($('date').value).toISOString(), pair: pairValue(),
         direction: $('dir').value, session: $('session').value, lots: num($('lots').value), risk_amount: num($('risk').value),
         entry: num($('entry').value), sl: num($('sl').value), tp: num($('tp').value), pnl: num($('pnl').value),
-        analysis: $('analysis').value, why: $('why').value, plan_followed: $('plan').value === 'Yes',
-        feeling: $('feel').value, lesson: $('lesson').value, image_path, setup: $('setupTag').value || null, checklist_ok: CHECKS.every((_, i) => $('chk' + i).checked), mistakes: MISTAKES.filter((_, i) => $('mk' + i).checked)
+        analysis: priv ? null : secret.analysis, why: priv ? null : secret.why, plan_followed: $('plan').value === 'Yes',
+        feeling: $('feel').value, lesson: priv ? null : secret.lesson, notes_private: priv, image_path, setup: $('setupTag').value || null, checklist_ok: CHECKS.every((_, i) => $('chk' + i).checked), mistakes: MISTAKES.filter((_, i) => $('mk' + i).checked)
       };
+      const id = editing ? editing.id : crypto.randomUUID();
       const q0 = sb.from('trades');
-      const { error } = editing ? await q0.update(payload).eq('id', editing.id) : await q0.insert(payload);
+      const { error } = editing ? await q0.update(payload).eq('id', id) : await q0.insert({ ...payload, id });
       if (error) throw error;
+      const pr = priv ? await sb.from('trade_private').upsert({ trade_id: id, ...secret }, { onConflict: 'trade_id' })
+        : (editing ? await sb.from('trade_private').delete().eq('trade_id', id) : { error: null });
+      if (pr.error) {
+        if (!editing) await sb.from('trades').delete().eq('id', id);
+        throw new Error(editing ? 'Private notes could not be saved. Your text is still in the form, so try again.' : 'Private notes could not be saved, so the trade was not saved. Run migration-6-private.sql in Supabase first.');
+      }
+      if (priv) privMap[id] = { trade_id: id, ...secret }; else delete privMap[id];
       if (editing && shotBlob && oldPath) await sb.storage.from('screenshots').remove([oldPath]);
       cancelEdit(true);
       $('f').reset(); shotBlob = null; $('pair').value = 'XAUUSD'; $('session').value = 'London'; setNow(); showRR(); showR();
@@ -389,7 +431,7 @@ function start() {
         pts.map((v, i) => x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ') + '" fill="none" stroke="' + col + '" stroke-width="2.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/><circle cx="' + x(pts.length - 1) + '" cy="' + y(c) + '" r="4" fill="' + col + '"/>';
     }
 
-    drawBreakdown(); drawGuard(); drawExpectancy(); drawMistakes(); drawWeek();
+    drawBreakdown(); drawGuard(); drawExpectancy(); drawMistakes(); drawWeek(); drawDrawdown();
     const f = $('filter').value;
     const list = trades.filter(t => f === 'all' || (f === 'win' ? t.pnl > 0 : t.pnl < 0));
     if (!list.length) { $('list').innerHTML = '<div class="empty">No trades to show yet.</div>'; return; }
@@ -398,8 +440,8 @@ function start() {
       const when = new Date(t.traded_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
       const sec = (h, v) => v ? '<h3>' + h + '</h3><p>' + esc(v) + '</p>' : '';
       const lv = [t.entry != null && 'Entry ' + t.entry, t.sl != null && 'SL ' + t.sl, t.tp != null && 'TP ' + t.tp, t.lots != null && t.lots + ' lots', t.risk_amount != null && 'Risked $' + t.risk_amount].filter(Boolean).join(', ');
-      return '<details class="trade ' + cls + '"><summary><div><div class="t1">' + esc(t.pair) + ' ' + esc(t.direction) + (t.setup ? '<span class="tag">' + esc(t.setup) + '</span>' : '') + (t._quick ? '<span class="tag">Quick re-entry</span>' : '') + (t.checklist_ok === false ? '<span class="tag">Skipped checklist</span>' : '') + (t.mistakes && t.mistakes.length ? '<span class="tag">' + t.mistakes.length + (t.mistakes.length === 1 ? ' mistake' : ' mistakes') + '</span>' : '') + '</div><div class="t2">' + esc(when) + ', ' + esc(t.session) + (r ? ', planned 1:' + r.toFixed(2) : '') + '</div></div><div style="text-align:right"><div class="pl ' + (t.pnl >= 0 ? 'pos' : 'neg') + '">' + money(t.pnl) + '</div>' + (rm != null ? '<div class="t2">' + fr(rm) + '</div>' : '') + '</div></summary><div class="body">' +
-        sec('Levels', lv) + sec('Market analysis', t.analysis) + sec('Why I took it', t.why) +
+      return '<details class="trade ' + cls + '"><summary><div><div class="t1">' + esc(t.pair) + ' ' + esc(t.direction) + (t.setup ? '<span class="tag">' + esc(t.setup) + '</span>' : '') + (t._quick ? '<span class="tag">Quick re-entry</span>' : '') + (t.checklist_ok === false ? '<span class="tag">Skipped checklist</span>' : '') + (t.mistakes && t.mistakes.length ? '<span class="tag">' + t.mistakes.length + (t.mistakes.length === 1 ? ' mistake' : ' mistakes') + '</span>' : '') + (t.notes_private ? '<span class="tag">Private notes</span>' : '') + '</div><div class="t2">' + esc(when) + ', ' + esc(t.session) + (r ? ', planned 1:' + r.toFixed(2) : '') + '</div></div><div style="text-align:right"><div class="pl ' + (t.pnl >= 0 ? 'pos' : 'neg') + '">' + money(t.pnl) + '</div>' + (rm != null ? '<div class="t2">' + fr(rm) + '</div>' : '') + '</div></summary><div class="body">' +
+        sec('Levels', lv) + (t.notes_private && !t.analysis && !t.why && !t.lesson ? '<p class="t2" style="margin-top:12px">The written notes for this trade are private.</p>' : '') + sec('Market analysis', t.analysis) + sec('Why I took it', t.why) +
         sec('Plan and feeling', 'Followed plan: ' + (t.plan_followed ? 'Yes' : 'No') + (t.feeling ? '. Felt ' + t.feeling.toLowerCase() + '.' : '')) + sec('Mistakes', t.mistakes && t.mistakes.length ? t.mistakes.join(', ') : '') + sec('Lesson learned', t.lesson) +
         (t.image_path ? '<img loading="lazy" src="' + esc(imgUrl(t.image_path)) + '" alt="Chart screenshot for ' + esc(t.pair) + '">' : '') +
         (owner ? '<div style="margin-top:12px;display:flex;gap:8px"><button class="small" data-edit="' + esc(t.id) + '">Edit trade</button><button class="small" data-del="' + esc(t.id) + '">' + (pendingDelete === t.id ? 'Tap again to delete' : 'Delete trade') + '</button></div>' : '') + '</div></details>';
@@ -557,6 +599,74 @@ function start() {
     $('wkBody').innerHTML = cards + vs + chart + '<h2 style="margin:16px 0 0;font-size:16px">Highlights</h2><ul class="hl">' + hl.map(l => '<li>' + esc(l) + '</li>').join('') + '</ul>';
   }
 
+  function mergePrivate() {
+    trades.forEach(t => {
+      if (!t.notes_private) return;
+      const p = privMap[t.id] || {};
+      t.analysis = p.analysis || null; t.why = p.why || null; t.lesson = p.lesson || null;
+    });
+  }
+  async function loadPrivate() {
+    privMap = {};
+    if (owner) {
+      const { data, error } = await sb.from('trade_private').select('*');
+      if (!error) (data || []).forEach(p => { privMap[p.trade_id] = p; });
+    }
+    mergePrivate(); render();
+  }
+
+  function drawDrawdown() {
+    const el = $('ddStats'); if (!el) return;
+    if (!trades.length) { el.innerHTML = '<div class="empty">These statistics appear after your first trade.</div>'; return; }
+    const asc = [...trades].sort((a, b) => a.traded_at.localeCompare(b.traded_at));
+    let c = 0, peak = 0, maxDD = 0, pct = null, w = 0, l = 0, bw = 0, bl = 0;
+    asc.forEach(t => {
+      c += t.pnl; if (c > peak) peak = c;
+      const dd = peak - c;
+      if (dd > maxDD) { maxDD = dd; pct = START_BALANCE > 0 ? dd / (START_BALANCE + peak) * 100 : null; }
+      if (t.pnl > 0) { w++; l = 0; } else if (t.pnl < 0) { l++; w = 0; } else { w = 0; l = 0; }
+      bw = Math.max(bw, w); bl = Math.max(bl, l);
+    });
+    const curDD = peak - c;
+    let cs = 0, ck = 0;
+    for (let i = asc.length - 1; i >= 0; i--) {
+      const sg = Math.sign(asc[i].pnl);
+      if (sg === 0) break;
+      if (!ck) ck = sg;
+      if (sg === ck) cs++; else break;
+    }
+    const dm = {}; asc.forEach(t => { const k = ymd(new Date(t.traded_at)); dm[k] = (dm[k] || 0) + t.pnl; });
+    const dv = Object.values(dm), green = dv.filter(v => v > 0).length;
+    const bestD = Math.max(...dv), worstD = Math.min(...dv);
+    const card = (v, l2, cl) => '<div class="stat"><b' + (cl ? ' class="' + cl + '"' : '') + '>' + v + '</b><span>' + l2 + '</span></div>';
+    el.innerHTML = '<div class="stats" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr))">' +
+      card(maxDD ? money(-maxDD) : '$0.00', 'Max drawdown' + (pct != null ? ' (' + pct.toFixed(1) + '% of account)' : ''), maxDD ? 'neg' : '') +
+      card(curDD ? money(-curDD) : 'At a high', 'Now below your peak', curDD ? 'neg' : 'pos') +
+      card(bw, 'Longest winning streak', 'pos') + card(bl, 'Longest losing streak', bl ? 'neg' : '') +
+      card(cs ? cs + (ck > 0 ? (cs === 1 ? ' win' : ' wins') : (cs === 1 ? ' loss' : ' losses')) : '–', 'Current streak', cs ? (ck > 0 ? 'pos' : 'neg') : '') +
+      card(money(bestD), 'Best day', bestD >= 0 ? 'pos' : 'neg') + card(money(worstD), 'Worst day', worstD >= 0 ? 'pos' : 'neg') +
+      card(green + ' of ' + dv.length, 'Profitable days') + '</div>' +
+      '<p class="note">Drawdown is measured from the highest point of your logged results, using closed trades only.</p>';
+  }
+
+  const PER_UNIT = { XAUUSD: () => 100, EURUSD: () => 100000, GBPUSD: () => 100000, USDJPY: e => 100000 / e };
+  function calcSize() {
+    const bal = num($('cBal').value), rp = num($('cRisk').value), e = num($('cEntry').value), sl = num($('cSl').value), sym = $('cSym').value;
+    $('cCustomWrap').hidden = sym !== 'custom';
+    const out = $('cOut'); $('cUse').hidden = true; calcResult = null;
+    try { localStorage.setItem('tj:calc', JSON.stringify({ bal: $('cBal').value, rp: $('cRisk').value, sym })); } catch (x) {}
+    if (!(bal > 0) || !(rp > 0) || e == null || sl == null || e === sl) { out.textContent = 'Enter your balance, risk %, entry and stop loss.'; return; }
+    const pu = sym === 'custom' ? num($('cCustom').value) : PER_UNIT[sym](e);
+    if (!(pu > 0)) { out.textContent = 'Enter the value of a 1.00 price move for one lot.'; return; }
+    const riskUsd = bal * rp / 100, dist = +Math.abs(e - sl).toFixed(8);
+    const lots = Math.floor(+(riskUsd / (dist * pu) * 100).toFixed(6)) / 100;
+    if (lots < 0.01) { out.textContent = 'Too small for the 0.01 minimum lot. At 0.01 lots you would risk $' + (dist * pu * 0.01).toFixed(2) + '. Tighten the stop or raise the risk %.'; return; }
+    const actual = lots * dist * pu;
+    const stop = sym === 'XAUUSD' ? '$' + dist.toFixed(2) + ' move' : sym === 'USDJPY' ? (dist / 0.01).toFixed(1) + ' pips' : sym === 'custom' ? dist + ' price units' : (dist / 0.0001).toFixed(1) + ' pips';
+    out.innerHTML = '<b style="display:inline;color:var(--ink);font-size:18px">Lot size: ' + lots.toFixed(2) + '</b><br>Risk: $' + actual.toFixed(2) + ' (' + (actual / bal * 100).toFixed(2) + '% of balance)<br>Stop distance: ' + esc(stop);
+    calcResult = { lots, risk: actual, e, sl, sym }; $('cUse').hidden = false;
+  }
+
   function showChecks() {
     const n = CHECKS.filter((_, i) => $('chk' + i).checked).length;
     $('chkCount').textContent = n + ' of ' + CHECKS.length + ' ticked. Tick only what is true.';
@@ -604,6 +714,7 @@ function start() {
     setPair(t.pair); set('dir', t.direction); set('session', t.session); set('setupTag', t.setup);
     set('lots', t.lots); set('entry', t.entry); set('sl', t.sl); set('tp', t.tp); set('pnl', t.pnl); set('risk', t.risk_amount);
     set('analysis', t.analysis); set('why', t.why); set('plan', t.plan_followed ? 'Yes' : 'No'); set('feel', t.feeling); set('lesson', t.lesson);
+    $('notesPrivate').checked = !!t.notes_private;
     CHECKS.forEach((_, i) => { $('chk' + i).checked = t.checklist_ok === true; });
     MISTAKES.forEach((m, i) => { $('mk' + i).checked = !!(t.mistakes && t.mistakes.includes(m)); });
     $('saveBtn').textContent = 'Update trade'; $('cancelEdit').hidden = false;
@@ -674,6 +785,21 @@ function start() {
   $('mistakes').innerHTML = MISTAKES.map((c, i) => '<label><input type="checkbox" id="mk' + i + '"> ' + esc(c) + '</label>').join('');
   $('mistakes').addEventListener('change', showMistakes);
   showChecks(); showMistakes(); setInterval(drawGuard, 30000);
+
+  try {
+    const sv = JSON.parse(localStorage.getItem('tj:calc') || 'null');
+    if (sv) { $('cBal').value = sv.bal || ''; $('cRisk').value = sv.rp || '1'; if (sv.sym) $('cSym').value = sv.sym; }
+  } catch (x) {}
+  if (!$('cBal').value && START_BALANCE > 0) $('cBal').value = START_BALANCE;
+  ['cBal', 'cRisk', 'cSym', 'cEntry', 'cSl', 'cCustom'].forEach(id => { $(id).addEventListener('input', calcSize); $(id).addEventListener('change', calcSize); });
+  $('cUse').addEventListener('click', () => {
+    const r = calcResult; if (!r) return;
+    $('lots').value = r.lots; $('risk').value = r.risk.toFixed(2); $('entry').value = r.e; $('sl').value = r.sl;
+    $('dir').value = r.sl < r.e ? 'Buy' : 'Sell';
+    if (r.sym !== 'custom') setPair(r.sym);
+    showRR(); showR(); $('msg').className = 'msg'; $('msg').textContent = 'Lot size, risk, entry and stop loss filled in.';
+  });
+  calcSize();
 
   const moveWeek = d => { wkStart.setDate(wkStart.getDate() + d); drawWeek(); fillNotes(); };
   $('wkPrev').addEventListener('click', () => moveWeek(-7));
