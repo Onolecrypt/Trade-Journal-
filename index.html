@@ -90,11 +90,11 @@ th{color:var(--mute);font-weight:600;font-size:13px}
 .quick-only{display:none}
 form.quick .quick-only{display:block}
 form.quick .full-only{display:none}
+.ovr{border-color:var(--loss)}
 .trend{margin-bottom:20px}
 .trend-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
 .trend-head h2{margin:0}
 .trend-head select{width:auto}
-#trendBox{max-width:480px;margin:0 auto;min-height:120px}
 .note{color:var(--mute);font-size:13px;margin:8px 0 0;text-align:center}
 .msg{font-size:14px;margin-top:8px;min-height:1em}
 .owner-link{background:none;border:0;color:var(--mute);text-decoration:underline;min-height:0;padding:0;font-size:14px}
@@ -184,28 +184,24 @@ form.quick .full-only{display:none}
           </div>
           <fieldset class="chk" style="margin-top:12px"><legend>Mistakes</legend><div id="mistakes"></div><p class="cnt" id="mkCount"></p></fieldset>
           <div class="full-only"><label for="lesson">Lesson learned</label><textarea id="lesson"></textarea></div>
+          <fieldset class="chk ovr" id="ovBox" hidden><legend>Rule break</legend>
+            <p class="rr" id="ovMsg" style="margin:6px 0"></p>
+            <label for="ovReason" style="margin-top:4px">Why are you taking this trade? Be honest.</label><textarea id="ovReason"></textarea>
+            <p class="cnt" id="ovCnt"></p>
+          </fieldset>
           <button class="primary" id="saveBtn" type="submit">Save trade</button>
           <button class="small" id="cancelEdit" type="button" style="margin-top:8px" hidden>Cancel edit</button>
           <div class="msg" id="msg" role="status"></div>
         </form>
       </section>
-
-    <section class="panel trend">
-      <div class="trend-head">
-        <h2>Market trend</h2>
-        <select id="sym" aria-label="Choose market">
-          <option value="OANDA:XAUUSD">XAUUSD</option>
-          <option value="OANDA:EURUSD">EURUSD</option>
-          <option value="OANDA:GBPUSD">GBPUSD</option>
-          <option value="OANDA:USDJPY">USDJPY</option>
-        </select>
-      </div>
-      <div id="trendBox"><p class="note">Loading trend…</p></div>
-      <p class="note">Live technical reading from TradingView. Use the tabs to switch timeframes. Prices can differ slightly from your broker.</p>
-    </section>
     </div>
 
     <div class="tabpane" id="tab-stats" hidden>
+    <section class="panel trend">
+      <h2>Discipline</h2>
+      <div id="disc"></div>
+    </section>
+
     <section class="panel trend">
       <h2>Expectancy</h2>
       <div id="exp"></div>
@@ -305,6 +301,10 @@ const RULES = {
   cooldownMinutes: 15,      // breather after a loss
   quickReentryMinutes: 15   // flag a trade taken this soon after a loss
 };
+// Discipline streak: a trading day is clean unless a trade that day does something switched on (true) here.
+const DISCIPLINE = { overrides: true, planNotFollowed: true, checklistSkipped: true, quickReentry: true, mistakes: false };
+// After your daily limit is hit, logging another trade needs an honest reason of at least this many characters.
+const OVERRIDE_MIN = 15;
 // Your starting account balance in $. Set it to see drawdown as a % of the account (0 = unknown).
 const START_BALANCE = 0;
 // 3. Your pre-trade checklist. Edit the wording or add and remove lines.
@@ -340,7 +340,7 @@ else { $('app').hidden = false; start(); }
 
 function start() {
   const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-  let trades = [], owner = false, shotBlob = null, pendingDelete = null, editing = null, wkStart = mondayOf(new Date()), reviews = {}, reviewsErr = '', privMap = {}, calcResult = null, tab = 'trades', trendLoaded = false, mode = 'quick';
+  let trades = [], owner = false, shotBlob = null, pendingDelete = null, editing = null, wkStart = mondayOf(new Date()), reviews = {}, reviewsErr = '', privMap = {}, ovMap = {}, calcResult = null, tab = 'trades', mode = 'quick';
   const imgUrl = p => sb.storage.from('screenshots').getPublicUrl(p).data.publicUrl;
 
   function setNow() { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); $('date').value = d.toISOString().slice(0, 16); }
@@ -406,6 +406,12 @@ function start() {
 
   $('f').addEventListener('submit', async e => {
     e.preventDefault();
+    const stopNow = currentStop();
+    if (stopNow.length && $('ovReason').value.trim().length < OVERRIDE_MIN) {
+      $('ovBox').hidden = false; $('msg').className = 'msg neg';
+      $('msg').textContent = 'Your rule says stop. Write why you are taking this trade first.';
+      $('ovReason').focus(); return;
+    }
     const btn = $('saveBtn'); btn.disabled = true; $('msg').className = 'msg'; $('msg').textContent = 'Saving…';
     try {
       let image_path = editing ? editing.image_path : null;
@@ -424,7 +430,7 @@ function start() {
         direction: $('dir').value, session: quick ? autoSession(new Date()) : $('session').value, lots: num($('lots').value), risk_amount: num($('risk').value),
         entry: num($('entry').value), sl: num($('sl').value), tp: num($('tp').value), pnl: num($('pnl').value),
         analysis: priv ? null : secret.analysis, why: priv ? null : secret.why, plan_followed: $('plan').value === 'Yes',
-        feeling: $('feel').value, lesson: priv ? null : secret.lesson, notes_private: priv, image_path, setup: $('setupTag').value || null, checklist_ok: CHECKS.every((_, i) => $('chk' + i).checked), mistakes: MISTAKES.filter((_, i) => $('mk' + i).checked)
+        feeling: $('feel').value, lesson: priv ? null : secret.lesson, notes_private: priv, rule_override: editing ? !!editing.rule_override : stopNow.length > 0, image_path, setup: $('setupTag').value || null, checklist_ok: CHECKS.every((_, i) => $('chk' + i).checked), mistakes: MISTAKES.filter((_, i) => $('mk' + i).checked)
       };
       const id = editing ? editing.id : crypto.randomUUID();
       const q0 = sb.from('trades');
@@ -435,6 +441,14 @@ function start() {
       if (pr.error) {
         if (!editing) await sb.from('trades').delete().eq('id', id);
         throw new Error(editing ? 'Private notes could not be saved. Your text is still in the form, so try again.' : 'Private notes could not be saved, so the trade was not saved. Run migration-6-private.sql in Supabase first.');
+      }
+      if (stopNow.length) {
+        const orr = await sb.from('rule_overrides').insert({ trade_id: id, reason: $('ovReason').value.trim(), rules: stopNow.join(' ') });
+        if (orr.error) {
+          if (!editing) await sb.from('trades').delete().eq('id', id);
+          throw new Error('The rule break could not be recorded, so the trade was not saved. Run migration-7-overrides.sql in Supabase first.');
+        }
+        ovMap[id] = $('ovReason').value.trim();
       }
       if (priv) privMap[id] = { trade_id: id, ...secret }; else delete privMap[id];
       if (editing && shotBlob && oldPath) await sb.storage.from('screenshots').remove([oldPath]);
@@ -474,7 +488,7 @@ function start() {
         pts.map((v, i) => x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ') + '" fill="none" stroke="' + col + '" stroke-width="2.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/><circle cx="' + x(pts.length - 1) + '" cy="' + y(c) + '" r="4" fill="' + col + '"/>';
     }
 
-    drawBreakdown(); drawGuard(); drawExpectancy(); drawMistakes(); drawWeek(); drawDrawdown();
+    drawBreakdown(); drawGuard(); drawExpectancy(); drawMistakes(); drawWeek(); drawDrawdown(); drawDiscipline();
     const f = $('filter').value;
     const list = trades.filter(t => f === 'all' || (f === 'win' ? t.pnl > 0 : t.pnl < 0));
     if (!list.length) { $('list').innerHTML = '<div class="empty">No trades to show yet.</div>'; return; }
@@ -483,9 +497,9 @@ function start() {
       const when = new Date(t.traded_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
       const sec = (h, v) => v ? '<h3>' + h + '</h3><p>' + esc(v) + '</p>' : '';
       const lv = [t.entry != null && 'Entry ' + t.entry, t.sl != null && 'SL ' + t.sl, t.tp != null && 'TP ' + t.tp, t.lots != null && t.lots + ' lots', t.risk_amount != null && 'Risked $' + t.risk_amount].filter(Boolean).join(', ');
-      return '<details class="trade ' + cls + '"><summary><div><div class="t1">' + esc(t.pair) + ' ' + esc(t.direction) + (t.setup ? '<span class="tag">' + esc(t.setup) + '</span>' : '') + (t._quick ? '<span class="tag">Quick re-entry</span>' : '') + (t.checklist_ok === false ? '<span class="tag">Skipped checklist</span>' : '') + (t.mistakes && t.mistakes.length ? '<span class="tag">' + t.mistakes.length + (t.mistakes.length === 1 ? ' mistake' : ' mistakes') + '</span>' : '') + (t.notes_private ? '<span class="tag">Private notes</span>' : '') + '</div><div class="t2">' + esc(when) + ', ' + esc(t.session) + (r ? ', planned 1:' + r.toFixed(2) : '') + '</div></div><div style="text-align:right"><div class="pl ' + (t.pnl >= 0 ? 'pos' : 'neg') + '">' + money(t.pnl) + '</div>' + (rm != null ? '<div class="t2">' + fr(rm) + '</div>' : '') + '</div></summary><div class="body">' +
+      return '<details class="trade ' + cls + '"><summary><div><div class="t1">' + esc(t.pair) + ' ' + esc(t.direction) + (t.setup ? '<span class="tag">' + esc(t.setup) + '</span>' : '') + (t._quick ? '<span class="tag">Quick re-entry</span>' : '') + (t.checklist_ok === false ? '<span class="tag">Skipped checklist</span>' : '') + (t.mistakes && t.mistakes.length ? '<span class="tag">' + t.mistakes.length + (t.mistakes.length === 1 ? ' mistake' : ' mistakes') + '</span>' : '') + (t.notes_private ? '<span class="tag">Private notes</span>' : '') + (t.rule_override ? '<span class="tag">Rule override</span>' : '') + '</div><div class="t2">' + esc(when) + ', ' + esc(t.session) + (r ? ', planned 1:' + r.toFixed(2) : '') + '</div></div><div style="text-align:right"><div class="pl ' + (t.pnl >= 0 ? 'pos' : 'neg') + '">' + money(t.pnl) + '</div>' + (rm != null ? '<div class="t2">' + fr(rm) + '</div>' : '') + '</div></summary><div class="body">' +
         sec('Levels', lv) + (t.notes_private && !t.analysis && !t.why && !t.lesson ? '<p class="t2" style="margin-top:12px">The written notes for this trade are private.</p>' : '') + sec('Market analysis', t.analysis) + sec('Why I took it', t.why) +
-        sec('Plan and feeling', 'Followed plan: ' + (t.plan_followed ? 'Yes' : 'No') + (t.feeling ? '. Felt ' + t.feeling.toLowerCase() + '.' : '')) + sec('Mistakes', t.mistakes && t.mistakes.length ? t.mistakes.join(', ') : '') + sec('Lesson learned', t.lesson) +
+        sec('Plan and feeling', 'Followed plan: ' + (t.plan_followed ? 'Yes' : 'No') + (t.feeling ? '. Felt ' + t.feeling.toLowerCase() + '.' : '')) + sec('Why I broke my rule', t.override_reason) + sec('Mistakes', t.mistakes && t.mistakes.length ? t.mistakes.join(', ') : '') + sec('Lesson learned', t.lesson) +
         (t.image_path ? '<img loading="lazy" src="' + esc(imgUrl(t.image_path)) + '" alt="Chart screenshot for ' + esc(t.pair) + '">' : '') +
         (owner ? '<div style="margin-top:12px;display:flex;gap:8px"><button class="small" data-edit="' + esc(t.id) + '">Edit trade</button><button class="small" data-del="' + esc(t.id) + '">' + (pendingDelete === t.id ? 'Tap again to delete' : 'Delete trade') + '</button></div>' : '') + '</div></details>';
     }).join('');
@@ -644,16 +658,19 @@ function start() {
 
   function mergePrivate() {
     trades.forEach(t => {
+      t.override_reason = ovMap[t.id] || null;
       if (!t.notes_private) return;
       const p = privMap[t.id] || {};
       t.analysis = p.analysis || null; t.why = p.why || null; t.lesson = p.lesson || null;
     });
   }
   async function loadPrivate() {
-    privMap = {};
+    privMap = {}; ovMap = {};
     if (owner) {
       const { data, error } = await sb.from('trade_private').select('*');
       if (!error) (data || []).forEach(p => { privMap[p.trade_id] = p; });
+      const od = await sb.from('rule_overrides').select('*');
+      if (!od.error) (od.data || []).forEach(o => { ovMap[o.trade_id] = o.reason; });
     }
     mergePrivate(); render();
   }
@@ -717,13 +734,13 @@ function start() {
       $('tab-' + t).hidden = t !== n;
       $('nav-' + t).classList.toggle('on', t === n);
     });
-    if (n === 'log' && !trendLoaded) { trendLoaded = true; loadTrend(); }
     window.scrollTo(0, 0);
   }
   function applyMode() {
     $('f').classList.toggle('quick', mode === 'quick' && !editing);
     $('mQuick').classList.toggle('on', mode === 'quick');
     $('mFull').classList.toggle('on', mode === 'full');
+    updateOv();
   }
   function setMode(m) {
     mode = m;
@@ -746,10 +763,9 @@ function start() {
       t._quick = !!(p && p.pnl < 0 && RULES.quickReentryMinutes && (new Date(t.traded_at) - new Date(p.traded_at)) / 60000 < RULES.quickReentryMinutes);
     });
   }
-  function drawGuard() {
-    const el = $('guard'); if (!el) return;
-    const now = new Date(), day = now.toDateString();
-    const asc = [...trades].sort((a, b) => a.traded_at.localeCompare(b.traded_at));
+  function guardAt(when) {
+    const asc = [...trades].sort((a, b) => a.traded_at.localeCompare(b.traded_at)).filter(t => new Date(t.traded_at) < when);
+    const day = when.toDateString();
     const today = asc.filter(t => new Date(t.traded_at).toDateString() === day);
     const lossesToday = today.filter(t => t.pnl < 0).length;
     const netToday = today.reduce((s, t) => s + t.pnl, 0);
@@ -762,15 +778,72 @@ function start() {
     else if (RULES.maxLossStreak && streak > 0 && streak === RULES.maxLossStreak - 1) warn.push(streak + ' losses in a row. Be extra selective.');
     if (RULES.dailyLossLimit && netToday <= -RULES.dailyLossLimit) stop.push('You are down ' + money(netToday).replace('−', '') + ' today. Your limit is $' + RULES.dailyLossLimit + '.');
     if (last && last.pnl < 0 && RULES.cooldownMinutes) {
-      const lt = new Date(last.traded_at), mins = (now - lt) / 60000;
+      const lt = new Date(last.traded_at), mins = (when - lt) / 60000;
       if (mins >= 0 && mins < RULES.cooldownMinutes) warn.push('Your last trade was a loss ' + Math.round(mins) + ' min ago. Take a breather until ' + new Date(lt.getTime() + RULES.cooldownMinutes * 60000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '.');
     }
+    return { stop, warn, today, lossesToday, netToday };
+  }
+  function breakReasons(t) {
+    const r = [];
+    if (DISCIPLINE.overrides && t.rule_override) r.push('rule override');
+    if (DISCIPLINE.planNotFollowed && t.plan_followed === false) r.push('plan not followed');
+    if (DISCIPLINE.checklistSkipped && t.checklist_ok === false) r.push('checklist skipped');
+    if (DISCIPLINE.quickReentry && t._quick) r.push('quick re-entry');
+    if (DISCIPLINE.mistakes && t.mistakes && t.mistakes.length) r.push('mistake');
+    return r;
+  }
+  function discipline() {
+    const byDay = {};
+    [...trades].sort((a, b) => a.traded_at.localeCompare(b.traded_at)).forEach(t => { const k = ymd(new Date(t.traded_at)); (byDay[k] = byDay[k] || []).push(t); });
+    const clean = Object.keys(byDay).sort().map(k => byDay[k].every(t => !breakReasons(t).length));
+    let cur = 0; for (let i = clean.length - 1; i >= 0 && clean[i]; i--) cur++;
+    let best = 0, run = 0; clean.forEach(c => { run = c ? run + 1 : 0; best = Math.max(best, run); });
+    return { cur, best, days: clean.length, cleanDays: clean.filter(Boolean).length, bad: trades.filter(t => breakReasons(t).length), good: trades.filter(t => !breakReasons(t).length) };
+  }
+  function currentStop() {
+    if (editing) return [];
+    const when = mode === 'quick' ? new Date() : new Date($('date').value || Date.now());
+    return isNaN(when) ? [] : guardAt(when).stop;
+  }
+  function updateOv() {
+    const st = currentStop(), box = $('ovBox');
+    if (!box) return;
+    box.hidden = !st.length;
+    $('ovMsg').textContent = st.length ? st.join(' ') + ' Your own rules say no more trades. Saving this one counts as a rule break.' : '';
+    const n = $('ovReason').value.trim().length;
+    $('ovCnt').textContent = st.length ? (n >= OVERRIDE_MIN ? 'Reason noted.' : 'Write at least ' + OVERRIDE_MIN + ' characters.') : '';
+    $('saveBtn').textContent = editing ? 'Update trade' : (st.length ? 'Save as rule break' : 'Save trade');
+  }
+  function drawGuard() {
+    const el = $('guard'); if (!el) return;
+    const g = guardAt(new Date()), stop = g.stop, warn = g.warn;
     let cls = 'ok', title = 'Clear to trade', lines;
-    if (stop.length) { cls = 'stop'; title = 'Stop for today'; lines = stop.concat(['Your own rules say to step away. Log the trade, close the platform, and come back fresh.']); }
+    if (stop.length) { cls = 'stop'; title = 'Stop for today'; lines = stop.concat(['Your own rules say to step away. Any trade you log now counts as a rule break and needs an honest reason.']); }
     else if (warn.length) { cls = 'warn'; title = 'Slow down'; lines = warn; }
-    else lines = [today.length ? 'Today: ' + today.length + (today.length === 1 ? ' trade, ' : ' trades, ') + lossesToday + ' lost, net ' + money(netToday) + '.' : 'No trades logged today.'];
+    else lines = [g.today.length ? 'Today: ' + g.today.length + (g.today.length === 1 ? ' trade, ' : ' trades, ') + g.lossesToday + ' lost, net ' + money(g.netToday) + '.' : 'No trades logged today.'];
+    const ds = discipline();
+    if (ds.days) lines = lines.concat(['Discipline streak: ' + ds.cur + (ds.cur === 1 ? ' clean trading day.' : ' clean trading days.')]);
     el.className = 'guard ' + cls;
     el.innerHTML = '<b>' + title + '</b>' + lines.map(l => '<p>' + esc(l) + '</p>').join('');
+    updateOv();
+  }
+  function drawDiscipline() {
+    const el = $('disc'); if (!el) return;
+    if (!trades.length) { el.innerHTML = '<div class="empty">Your discipline record appears after your first trade.</div>'; return; }
+    const d = discipline();
+    const net = a => a.reduce((s, t) => s + t.pnl, 0);
+    const wr = a => a.length ? Math.round(a.filter(t => t.pnl > 0).length / a.length * 100) + '%' : '–';
+    const card = (v, l, c) => '<div class="stat"><b' + (c ? ' class="' + c + '"' : '') + '>' + v + '</b><span>' + l + '</span></div>';
+    const overrides = trades.filter(t => t.rule_override).length;
+    const counts = {}; trades.forEach(t => breakReasons(t).forEach(r => { counts[r] = (counts[r] || 0) + 1; }));
+    const top = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(x => x[0] + ' (' + x[1] + ')').join(', ');
+    const row = (name, a) => '<tr><td>' + name + '</td><td' + (a.length < 5 ? ' class="small-n"' : '') + '>' + a.length + '</td><td>' + wr(a) + '</td><td class="' + (net(a) >= 0 ? 'pos' : 'neg') + '">' + money(net(a)) + '</td></tr>';
+    el.innerHTML = '<div class="stats" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr))">' +
+      card(d.cur, d.cur === 1 ? 'Clean day in a row' : 'Clean days in a row', d.cur ? 'pos' : '') + card(d.best, 'Best streak') +
+      card(d.cleanDays + ' of ' + d.days, 'Clean trading days') + card(overrides, 'Rule overrides', overrides ? 'neg' : 'pos') + '</div>' +
+      '<div class="scroll" style="margin-top:12px"><table><thead><tr><th>Trades</th><th>Count</th><th>Win rate</th><th>Net</th></tr></thead><tbody>' + row('Followed my rules', d.good) + row('Broke a rule', d.bad) + '</tbody></table></div>' +
+      (top ? '<p class="note" style="text-align:left">What broke your rules: ' + esc(top) + '.</p>' : '') +
+      '<p class="note" style="text-align:left">A trading day is clean when none of its trades broke a rule. Days with no trades do not break your streak.</p>';
   }
 
   function startEdit(t) {
@@ -791,7 +864,7 @@ function start() {
     showRR(); showR(); showChecks(); showMistakes(); applyMode(); showTab('log');
   }
   function cancelEdit(quiet) {
-    editing = null; shotBlob = null; $('shot').value = ''; $('f').reset();
+    editing = null; shotBlob = null; $('shot').value = ''; $('f').reset(); $('ovReason').value = '';
     setPair('XAUUSD'); $('session').value = 'London'; $('setupTag').value = '';
     $('saveBtn').textContent = 'Save trade'; $('cancelEdit').hidden = true;
     if (!quiet) $('msg').textContent = '';
@@ -822,27 +895,13 @@ function start() {
   }
   $('csv').addEventListener('click', () => {
     const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
-    const head = ['date', 'pair', 'direction', 'session', 'setup', 'lots', 'entry', 'sl', 'tp', 'result', 'risk', 'r_multiple', 'followed_plan', 'checklist_done', 'mistakes', 'feeling'];
-    const rows = [...trades].reverse().map(t => [t.traded_at, t.pair, t.direction, t.session, t.setup, t.lots, t.entry, t.sl, t.tp, t.pnl, t.risk_amount, t.risk_amount > 0 ? (t.pnl / t.risk_amount).toFixed(2) : '', t.plan_followed ? 'Yes' : 'No', t.checklist_ok == null ? '' : (t.checklist_ok ? 'Yes' : 'No'), Array.isArray(t.mistakes) ? t.mistakes.join('; ') : '', t.feeling].map(q).join(','));
+    const head = ['date', 'pair', 'direction', 'session', 'setup', 'lots', 'entry', 'sl', 'tp', 'result', 'risk', 'r_multiple', 'followed_plan', 'checklist_done', 'rule_override', 'mistakes', 'feeling'];
+    const rows = [...trades].reverse().map(t => [t.traded_at, t.pair, t.direction, t.session, t.setup, t.lots, t.entry, t.sl, t.tp, t.pnl, t.risk_amount, t.risk_amount > 0 ? (t.pnl / t.risk_amount).toFixed(2) : '', t.plan_followed ? 'Yes' : 'No', t.checklist_ok == null ? '' : (t.checklist_ok ? 'Yes' : 'No'), t.rule_override ? 'Yes' : 'No', Array.isArray(t.mistakes) ? t.mistakes.join('; ') : '', t.feeling].map(q).join(','));
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([[head.join(','), ...rows].join('\n')], { type: 'text/csv' }));
     a.download = 'trading-journal.csv'; a.click();
   });
 
-  // TradingView Technical Analysis widget (free embed, no API key)
-  const dark = window.matchMedia('(prefers-color-scheme: dark)');
-  function loadTrend() {
-    const box = $('trendBox'); box.innerHTML = '';
-    const wrap = document.createElement('div'); wrap.className = 'tradingview-widget-container';
-    const w = document.createElement('div'); w.className = 'tradingview-widget-container__widget'; wrap.appendChild(w);
-    const s = document.createElement('script');
-    s.src = 'https://s3.tradingview.com/external-embedding/embed-widget-technical-analysis.js';
-    s.async = true;
-    s.text = JSON.stringify({ interval: '1h', width: '100%', height: 420, isTransparent: true, symbol: $('sym').value, showIntervalTabs: true, displayMode: 'single', locale: 'en', colorTheme: dark.matches ? 'dark' : 'light' });
-    wrap.appendChild(s); box.appendChild(wrap);
-  }
-  $('sym').addEventListener('change', loadTrend);
-  if (dark.addEventListener) dark.addEventListener('change', () => { if (trendLoaded) loadTrend(); });
 
   // Your fixed list of setups. Edit these names to suit your strategy.
   const SETUPS = ['Breakout', 'Retest', 'Trend pullback', 'Reversal', 'News spike', 'Range play', 'Other'];
@@ -882,6 +941,7 @@ function start() {
     reviews[key] = row; msg.textContent = 'Review saved.';
   });
 
+  ['ovReason', 'date'].forEach(id => { $(id).addEventListener('input', updateOv); $(id).addEventListener('change', updateOv); });
   try { mode = localStorage.getItem('tj:mode') === 'full' ? 'full' : 'quick'; } catch (x) {}
   ['trades', 'log', 'stats', 'review', 'account'].forEach(t => $('nav-' + t).addEventListener('click', () => showTab(t)));
   $('mQuick').addEventListener('click', () => setMode('quick'));
