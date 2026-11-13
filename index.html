@@ -209,6 +209,27 @@ form.quick .full-only{display:none}
     </section>
 
     <section class="panel trend">
+      <h2>How reliable are your numbers?</h2>
+      <div id="rel"></div>
+    </section>
+
+    <section class="panel trend">
+      <h2>Simulation</h2>
+      <p class="note" style="text-align:left;margin:0 0 8px">Reshuffles your real trade results thousands of times to show the range of outcomes that luck alone could produce.</p>
+      <div class="row">
+        <div><label for="sRisk">Risk per trade (%)</label><input id="sRisk" type="number" step="any" inputmode="decimal" value="1"></div>
+        <div><label for="sTrades">Trades to simulate</label><input id="sTrades" type="number" step="1" inputmode="numeric" value="60"></div>
+      </div>
+      <div class="row">
+        <div><label for="sTarget">Profit target (%)</label><input id="sTarget" type="number" step="any" inputmode="decimal" value="10"></div>
+        <div><label for="sLimit">Max drawdown (%)</label><input id="sLimit" type="number" step="any" inputmode="decimal" value="10"></div>
+      </div>
+      <label for="sMode">Drawdown is measured from</label>
+      <select id="sMode"><option value="start">Starting balance</option><option value="peak">Highest point so far (trailing)</option></select>
+      <div id="sOut" style="margin-top:14px"></div>
+    </section>
+
+    <section class="panel trend">
       <h2>Drawdown and streaks</h2>
       <div id="ddStats"></div>
     </section>
@@ -489,6 +510,7 @@ function start() {
     }
 
     drawBreakdown(); drawGuard(); drawExpectancy(); drawMistakes(); drawWeek(); drawDrawdown(); drawDiscipline();
+    if (tab === 'stats') { drawReliability(); drawSim(); }
     const f = $('filter').value;
     const list = trades.filter(t => f === 'all' || (f === 'win' ? t.pnl > 0 : t.pnl < 0));
     if (!list.length) { $('list').innerHTML = '<div class="empty">No trades to show yet.</div>'; return; }
@@ -734,6 +756,7 @@ function start() {
       $('tab-' + t).hidden = t !== n;
       $('nav-' + t).classList.toggle('on', t === n);
     });
+    if (n === 'stats') { drawReliability(); drawSim(); }
     window.scrollTo(0, 0);
   }
   function applyMode() {
@@ -827,6 +850,129 @@ function start() {
     el.innerHTML = '<b>' + title + '</b>' + lines.map(l => '<p>' + esc(l) + '</p>').join('');
     updateOv();
   }
+  // ---------- Confidence ranges and simulation
+  function simData() {
+    const withR = trades.filter(t => t.risk_amount > 0).map(t => t.pnl / t.risk_amount);
+    if (withR.length >= 10) return { vals: withR, approx: false };
+    const losses = trades.filter(t => t.pnl < 0);
+    if (trades.length >= 10 && losses.length) {
+      const L = Math.abs(losses.reduce((a, t) => a + t.pnl, 0)) / losses.length;
+      return { vals: trades.map(t => t.pnl / L), approx: true };
+    }
+    return null;
+  }
+  function mulberry(seed) {
+    let a = seed | 0;
+    return () => { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  }
+  const seedOf = v => v.reduce((h, x) => (Math.imul(h, 31) + Math.round(x * 1000)) | 0, v.length);
+  const pctl = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor(p * (sorted.length - 1))))];
+  function wilson(w, n) {
+    const z = 1.96, p = w / n, d = 1 + z * z / n, c = p + z * z / (2 * n), m = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n));
+    return [(c - m) / d, (c + m) / d];
+  }
+  let relKey = '', simKey = '', simTimer = null;
+  function drawReliability() {
+    const el = $('rel'); if (!el) return;
+    const d = simData();
+    if (!d) { relKey = ''; el.innerHTML = '<div class="empty">This needs at least 10 trades. Log the amount risked on each trade so results are measured in R.</div>'; return; }
+    const key = d.vals.join(',') + '|' + d.approx;
+    if (key === relKey) return;
+    relKey = key;
+    const v = d.vals, n = v.length, mean = v.reduce((a, x) => a + x, 0) / n;
+    const sd = Math.sqrt(v.reduce((a, x) => a + (x - mean) ** 2, 0) / Math.max(1, n - 1));
+    const r = mulberry(seedOf(v)), B = 3000, means = new Float64Array(B);
+    for (let b = 0; b < B; b++) { let sum = 0; for (let i = 0; i < n; i++) sum += v[(r() * n) | 0]; means[b] = sum / n; }
+    means.sort();
+    const lo = pctl(means, 0.025), hi = pctl(means, 0.975);
+    let pos = 0; for (let b = 0; b < B; b++) if (means[b] > 0) pos++;
+    const dec = v.filter(x => x !== 0).length, wins = v.filter(x => x > 0).length;
+    const w = wilson(wins, dec), wr = Math.round(wins / dec * 100);
+    const need = mean > 0 && sd > 0 ? Math.ceil((1.96 * sd / mean) ** 2) : null;
+    const pc = x => Math.round(x * 100) + '%';
+    const verdict = lo > 0 ? 'Good sign: even the low end of the range is above zero, so luck alone is an unlikely explanation.'
+      : hi < 0 ? 'The whole range is below zero. Something in your approach needs to change.'
+      : 'Not proven yet: the range still includes zero, so luck cannot be ruled out. Keep logging and keep your risk small.';
+    el.innerHTML = '<div class="scroll"><table><thead><tr><th>Measure</th><th>Your result</th><th>95% range</th></tr></thead><tbody>' +
+      '<tr><td>Win rate</td><td>' + wr + '%</td><td>' + pc(w[0]) + ' to ' + pc(w[1]) + '</td></tr>' +
+      '<tr><td>Expectancy per trade</td><td class="' + (mean >= 0 ? 'pos' : 'neg') + '">' + fr(mean) + '</td><td>' + fr(lo) + ' to ' + fr(hi) + '</td></tr></tbody></table></div>' +
+      '<p style="margin:12px 0 0"><b style="display:inline">Chance your edge is real: ' + pc(pos / B) + '.</b> In that share of reshuffled versions of your own trades, the average result stayed above zero.</p>' +
+      '<p style="margin:8px 0 0">' + esc(verdict) + '</p>' +
+      '<p style="margin:8px 0 0">' + esc('You have ' + n + ' trades. ' + (need ? 'At your current results, about ' + need + ' trades are needed before the range stays clearly above zero.' : 'Your average is not positive yet, so more trades cannot prove an edge until your results improve.')) + '</p>' +
+      '<p class="note" style="text-align:left">' + (d.approx ? 'Fewer than 10 trades have the amount risked logged, so your average loss is used as 1R. ' : '') + 'Ranges come from resampling your own trades, so they get narrower as you log more.</p>';
+  }
+  function simRun(vals, o, sims, keepPaths) {
+    const r = mulberry(seedOf(vals) + Math.round(o.risk * 1000) + o.trades), n = vals.length, H = o.trades;
+    let hitT = 0, hitL = 0;
+    const end = new Float64Array(sims), mdd = new Float64Array(sims);
+    const paths = keepPaths ? Array.from({ length: H + 1 }, () => new Float64Array(sims)) : null;
+    for (let s2 = 0; s2 < sims; s2++) {
+      let eq = 0, peak = 0, md = 0, st = 0;
+      for (let k = 1; k <= H; k++) {
+        if (!st) {
+          eq += vals[(r() * n) | 0] * o.risk;
+          if (eq > peak) peak = eq;
+          const dd = o.trail ? peak - eq : Math.max(0, -eq);
+          if (dd > md) md = dd;
+          if (eq >= o.target) st = 1; else if (dd >= o.limit) st = 2;
+        }
+        if (paths) paths[k][s2] = eq;
+      }
+      end[s2] = eq; mdd[s2] = md;
+      if (st === 1) hitT++; else if (st === 2) hitL++;
+    }
+    return { pT: hitT / sims, pL: hitL / sims, pN: 1 - (hitT + hitL) / sims, end: end.sort(), mdd: mdd.sort(), paths };
+  }
+  function simInputs() {
+    const clamp = (x, a, b, d) => { x = parseFloat(x); return isNaN(x) ? d : Math.min(b, Math.max(a, x)); };
+    return { risk: clamp($('sRisk').value, 0.05, 10, 1), trades: Math.round(clamp($('sTrades').value, 5, 300, 60)), target: clamp($('sTarget').value, 0.5, 100, 10), limit: clamp($('sLimit').value, 0.5, 100, 10), trail: $('sMode').value === 'peak' };
+  }
+  function drawSim() {
+    const el = $('sOut'); if (!el) return;
+    const d = simData();
+    if (!d) { simKey = ''; el.innerHTML = '<div class="empty">The simulation needs at least 10 trades.</div>'; return; }
+    const o = simInputs();
+    const key = d.vals.join(',') + JSON.stringify(o);
+    if (key === simKey) return;
+    simKey = key;
+    try { localStorage.setItem('tj:sim', JSON.stringify({ r: $('sRisk').value, t: $('sTrades').value, g: $('sTarget').value, l: $('sLimit').value, m: $('sMode').value })); } catch (x) {}
+    const main = simRun(d.vals, o, 3000, true), H = o.trades;
+    const P = [0.05, 0.25, 0.5, 0.75, 0.95], bands = P.map(() => []);
+    for (let k = 0; k <= H; k++) { const sorted = main.paths[k].slice().sort(); P.forEach((p, i) => bands[i].push(pctl(sorted, p))); }
+    const lowV = Math.min(...bands[0], o.trail ? 0 : -o.limit), highV = Math.max(...bands[4], o.target), pad = (highV - lowV) * 0.06 || 1;
+    const lo = lowV - pad, hi = highV + pad;
+    const X = k => 38 + k / H * 274, Y = v => 8 + (hi - v) / (hi - lo) * 132;
+    const line = b => b.map((v, k) => X(k).toFixed(1) + ',' + Y(v).toFixed(1)).join(' ');
+    const band = (a, b) => line(a) + ' ' + b.map((v, k) => [X(k), Y(v)]).reverse().map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+    const lab = (v, c) => '<text x="34" y="' + (Y(v) + 3) + '" text-anchor="end" font-size="9" fill="' + c + '">' + (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v) + '%</text>';
+    const chart = '<svg viewBox="0 0 320 162" style="width:100%;display:block" role="img" aria-label="Range of possible account paths">' +
+      '<polygon points="' + band(bands[0], bands[4]) + '" fill="var(--mute)" opacity=".15"/>' +
+      '<polygon points="' + band(bands[1], bands[3]) + '" fill="var(--mute)" opacity=".3"/>' +
+      '<line x1="38" x2="312" y1="' + Y(0) + '" y2="' + Y(0) + '" stroke="var(--line)"/>' +
+      '<line x1="38" x2="312" y1="' + Y(o.target) + '" y2="' + Y(o.target) + '" stroke="var(--win)" stroke-dasharray="4 3"/>' +
+      (o.trail ? '' : '<line x1="38" x2="312" y1="' + Y(-o.limit) + '" y2="' + Y(-o.limit) + '" stroke="var(--loss)" stroke-dasharray="4 3"/>') +
+      '<polyline points="' + line(bands[2]) + '" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linejoin="round"/>' +
+      lab(o.target, 'var(--win)') + lab(0, 'var(--mute)') + (o.trail ? '' : lab(-o.limit, 'var(--loss)')) +
+      '<text x="38" y="156" font-size="9" fill="var(--mute)">Trade 0</text><text x="312" y="156" text-anchor="end" font-size="9" fill="var(--mute)">Trade ' + H + '</text></svg>' +
+      '<p class="note">Line: the typical path. Dark band: the middle half of outcomes. Light band: 9 in 10 outcomes.</p>';
+    const pc = x => Math.round(x * 100) + '%', sg = x => (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(x).toFixed(1) + '%';
+    const card = (v, l, c) => '<div class="stat"><b' + (c ? ' class="' + c + '"' : '') + '>' + v + '</b><span>' + l + '</span></div>';
+    const medEnd = pctl(main.end, 0.5), medDD = pctl(main.mdd, 0.5), badDD = pctl(main.mdd, 0.95);
+    const cards = '<div class="stats" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr))">' +
+      card(pc(main.pT), 'Reach the ' + o.target + '% target', 'pos') + card(pc(main.pL), 'Hit the ' + o.limit + '% drawdown limit', main.pL ? 'neg' : '') +
+      card(pc(main.pN), 'Neither within ' + H + ' trades') + card(sg(medEnd), 'Typical finish', medEnd >= 0 ? 'pos' : 'neg') +
+      card(sg(-medDD), 'Typical worst dip', 'neg') + card(sg(-badDD), 'Bad-luck dip (1 in 20)', 'neg') + '</div>';
+    const levels = [...new Set([0.25, 0.5, 1, 1.5, 2, o.risk])].sort((a, b) => a - b);
+    const rows = levels.map(L => ({ L, r: simRun(d.vals, { ...o, risk: L }, 1500, false) }));
+    const bestT = Math.max(...rows.map(x => x.r.pT)), bestL = Math.min(...rows.map(x => x.r.pL));
+    const table = '<h2 style="margin:16px 0 6px;font-size:16px">What if you risk less or more?</h2><div class="scroll"><table><thead><tr><th>Risk per trade</th><th>Reach target</th><th>Hit limit</th></tr></thead><tbody>' +
+      rows.map(x => '<tr' + (x.L === o.risk ? ' style="font-weight:600"' : '') + '><td>' + x.L + '%' + (x.L === o.risk ? ' (yours)' : '') + '</td><td class="' + (x.r.pT === bestT ? 'pos' : '') + '">' + pc(x.r.pT) + '</td><td class="' + (x.r.pL === bestL ? 'pos' : '') + '">' + pc(x.r.pL) + '</td></tr>').join('') + '</tbody></table></div>';
+    const n = d.vals.length;
+    const text = 'With your results so far, about ' + pc(main.pT) + ' of the simulations reached the ' + o.target + '% target before breaching the ' + o.limit + '% drawdown limit, and ' + pc(main.pL) + ' breached the limit first.' + (n < 30 ? ' This rests on only ' + n + ' trades, so treat the odds as rough.' : '');
+    el.innerHTML = cards + '<div style="margin-top:12px">' + chart + '</div><p style="margin:8px 0 0">' + esc(text) + '</p>' + table +
+      '<p class="note" style="text-align:left">Each run stops when it reaches the target or breaches the limit, like a real challenge. It assumes each trade is independent and that future results look like your past ones. Markets change, so read this as a range, not a promise. Risk is a percent of your starting balance. Check your prop firm’s exact drawdown rules' + (d.approx ? '. Your average loss is used as 1R because fewer than 10 trades have the amount risked logged' : '') + '.</p>';
+  }
+
   function drawDiscipline() {
     const el = $('disc'); if (!el) return;
     if (!trades.length) { el.innerHTML = '<div class="empty">Your discipline record appears after your first trade.</div>'; return; }
@@ -941,6 +1087,14 @@ function start() {
     reviews[key] = row; msg.textContent = 'Review saved.';
   });
 
+  try {
+    const sv = JSON.parse(localStorage.getItem('tj:sim') || 'null');
+    if (sv) { $('sRisk').value = sv.r; $('sTrades').value = sv.t; $('sTarget').value = sv.g; $('sLimit').value = sv.l; if (sv.m) $('sMode').value = sv.m; }
+  } catch (x) {}
+  ['sRisk', 'sTrades', 'sTarget', 'sLimit', 'sMode'].forEach(id => {
+    const h = () => { clearTimeout(simTimer); simTimer = setTimeout(drawSim, 350); };
+    $(id).addEventListener('input', h); $(id).addEventListener('change', h);
+  });
   ['ovReason', 'date'].forEach(id => { $(id).addEventListener('input', updateOv); $(id).addEventListener('change', updateOv); });
   try { mode = localStorage.getItem('tj:mode') === 'full' ? 'full' : 'quick'; } catch (x) {}
   ['trades', 'log', 'stats', 'review', 'account'].forEach(t => $('nav-' + t).addEventListener('click', () => showTab(t)));
