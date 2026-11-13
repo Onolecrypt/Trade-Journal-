@@ -214,6 +214,17 @@ form.quick .full-only{display:none}
     </section>
 
     <section class="panel trend">
+      <div class="trend-head">
+        <h2>Is your edge holding up?</h2>
+        <span style="display:flex;gap:6px;flex-wrap:wrap">
+          <select id="rMeasure" aria-label="Measure"><option value="exp">Expectancy (R)</option><option value="wr">Win rate</option><option value="net">Net result</option></select>
+          <select id="rWin" aria-label="Window size"><option value="10">Last 10</option><option value="20" selected>Last 20</option><option value="30">Last 30</option><option value="50">Last 50</option></select>
+        </span>
+      </div>
+      <div id="roll"></div>
+    </section>
+
+    <section class="panel trend">
       <h2>Simulation</h2>
       <p class="note" style="text-align:left;margin:0 0 8px">Reshuffles your real trade results thousands of times to show the range of outcomes that luck alone could produce.</p>
       <div class="row">
@@ -249,6 +260,17 @@ form.quick .full-only{display:none}
       </div>
       <div class="scroll" id="bd"></div>
       <p class="note">Groups with fewer than 5 trades are too small to trust yet.</p>
+    </section>
+
+    <section class="panel trend">
+      <div class="trend-head">
+        <h2>When you trade best</h2>
+        <select id="hMetric" aria-label="Heatmap measure"><option value="net">Net result</option><option value="wr">Win rate</option><option value="cnt">Number of trades</option></select>
+      </div>
+      <div id="heat"></div>
+      <p class="note" id="heatInfo" style="text-align:left">Tap a square for details.</p>
+      <div id="heatNotes"></div>
+      <p class="note" id="heatTz" style="text-align:left"></p>
     </section>
 
     <section class="panel trend">
@@ -328,6 +350,8 @@ const DISCIPLINE = { overrides: true, planNotFollowed: true, checklistSkipped: t
 const OVERRIDE_MIN = 15;
 // Your starting account balance in $. Set it to see drawdown as a % of the account (0 = unknown).
 const START_BALANCE = 0;
+// Your time zone in hours from UTC, used for the time heatmap (East Africa Time is 3).
+const TZ_OFFSET_HOURS = 3;
 // 3. Your pre-trade checklist. Edit the wording or add and remove lines.
 const CHECKS = [
   'The trend agrees with my direction',
@@ -510,7 +534,7 @@ function start() {
     }
 
     drawBreakdown(); drawGuard(); drawExpectancy(); drawMistakes(); drawWeek(); drawDrawdown(); drawDiscipline();
-    if (tab === 'stats') { drawReliability(); drawSim(); }
+    if (tab === 'stats') { drawReliability(); drawSim(); drawRoll(); drawHeat(); }
     const f = $('filter').value;
     const list = trades.filter(t => f === 'all' || (f === 'win' ? t.pnl > 0 : t.pnl < 0));
     if (!list.length) { $('list').innerHTML = '<div class="empty">No trades to show yet.</div>'; return; }
@@ -756,7 +780,7 @@ function start() {
       $('tab-' + t).hidden = t !== n;
       $('nav-' + t).classList.toggle('on', t === n);
     });
-    if (n === 'stats') { drawReliability(); drawSim(); }
+    if (n === 'stats') { drawReliability(); drawSim(); drawRoll(); drawHeat(); }
     window.scrollTo(0, 0);
   }
   function applyMode() {
@@ -844,6 +868,11 @@ function start() {
     if (stop.length) { cls = 'stop'; title = 'Stop for today'; lines = stop.concat(['Your own rules say to step away. Any trade you log now counts as a rule break and needs an honest reason.']); }
     else if (warn.length) { cls = 'warn'; title = 'Slow down'; lines = warn; }
     else lines = [g.today.length ? 'Today: ' + g.today.length + (g.today.length === 1 ? ' trade, ' : ' trades, ') + g.lossesToday + ' lost, net ' + money(g.netToday) + '.' : 'No trades logged today.'];
+    const re = recentEdge();
+    if (re != null && re < 0) {
+      lines = lines.concat(['Your last 20 trades average ' + fr(re) + '. Consider smaller size until your results recover.']);
+      if (cls === 'ok') { cls = 'warn'; title = 'Slow down'; }
+    }
     const ds = discipline();
     if (ds.days) lines = lines.concat(['Discipline streak: ' + ds.cur + (ds.cur === 1 ? ' clean trading day.' : ' clean trading days.')]);
     el.className = 'guard ' + cls;
@@ -973,6 +1002,112 @@ function start() {
       '<p class="note" style="text-align:left">Each run stops when it reaches the target or breaches the limit, like a real challenge. It assumes each trade is independent and that future results look like your past ones. Markets change, so read this as a range, not a promise. Risk is a percent of your starting balance. Check your prop firm’s exact drawdown rules' + (d.approx ? '. Your average loss is used as 1R because fewer than 10 trades have the amount risked logged' : '') + '.</p>';
   }
 
+  // ---------- Rolling edge and time heatmap
+  function rollSeq(m) {
+    const asc = [...trades].sort((a, b) => a.traded_at.localeCompare(b.traded_at));
+    if (m === 'wr') return { seq: asc.map(t => t.pnl > 0 ? 100 : 0), fmt: v => Math.round(v) + '%', delta: v => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(Math.round(v)) + ' pts' };
+    if (m === 'net') return { seq: asc.map(t => t.pnl), fmt: money, delta: money };
+    const withR = asc.filter(t => t.risk_amount > 0);
+    if (withR.length >= 10) return { seq: withR.map(t => t.pnl / t.risk_amount), fmt: fr, delta: fr, approx: false };
+    const losses = asc.filter(t => t.pnl < 0);
+    if (asc.length >= 10 && losses.length) {
+      const L = Math.abs(losses.reduce((a, t) => a + t.pnl, 0)) / losses.length;
+      return { seq: asc.map(t => t.pnl / L), fmt: fr, delta: fr, approx: true };
+    }
+    return null;
+  }
+  function recentEdge() {
+    const r = [...trades].sort((a, b) => a.traded_at.localeCompare(b.traded_at)).filter(t => t.risk_amount > 0).slice(-20).map(t => t.pnl / t.risk_amount);
+    return r.length >= 20 ? r.reduce((a, x) => a + x, 0) / 20 : null;
+  }
+  function drawRoll() {
+    const el = $('roll'); if (!el) return;
+    const W = parseInt($('rWin').value, 10) || 20, m = $('rMeasure').value, d = rollSeq(m);
+    if (!d || d.seq.length < W) { el.innerHTML = '<div class="empty">This needs at least ' + W + ' trades' + (m === 'exp' ? ' (or 10 with the amount risked logged)' : '') + '. Try a smaller window.</div>'; return; }
+    const seq = d.seq, n = seq.length, sum = a => a.reduce((x, y) => x + y, 0);
+    const agg = a => m === 'net' ? sum(a) : sum(a) / a.length;
+    const pts = []; for (let i = W - 1; i < n; i++) pts.push(agg(seq.slice(i - W + 1, i + 1)));
+    const base = m === 'net' ? sum(seq) / n * W : sum(seq) / n, recent = pts[pts.length - 1], zero = m !== 'wr';
+    const lowV = Math.min(...pts, base, zero ? 0 : Infinity), highV = Math.max(...pts, base, zero ? 0 : -Infinity), pad = (highV - lowV) * 0.1 || 1;
+    const lo = lowV - pad, hi = highV + pad, X = k => 40 + k / Math.max(1, pts.length - 1) * 272, Y = v => 8 + (hi - v) / (hi - lo) * 122;
+    const col = (m === 'wr' ? recent >= base : recent >= 0) ? 'var(--win)' : 'var(--loss)';
+    const lab = (v, c) => '<text x="36" y="' + (Y(v) + 3) + '" text-anchor="end" font-size="9" fill="' + c + '">' + esc(String(d.fmt(v)).replace('+', '')) + '</text>';
+    const chart = '<svg viewBox="0 0 320 150" style="width:100%;display:block" role="img" aria-label="Rolling results">' +
+      (zero ? '<line x1="40" x2="312" y1="' + Y(0) + '" y2="' + Y(0) + '" stroke="var(--line)"/>' : '') +
+      '<line x1="40" x2="312" y1="' + Y(base) + '" y2="' + Y(base) + '" stroke="var(--gold)" stroke-dasharray="4 3"/>' +
+      '<polyline points="' + pts.map((v, k) => X(k).toFixed(1) + ',' + Y(v).toFixed(1)).join(' ') + '" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linejoin="round"/>' +
+      '<circle cx="' + X(pts.length - 1) + '" cy="' + Y(recent) + '" r="4" fill="' + col + '"/>' +
+      lab(base, 'var(--gold)') + (zero ? lab(0, 'var(--mute)') : '') +
+      '<text x="40" y="146" font-size="9" fill="var(--mute)">Trade ' + W + '</text><text x="312" y="146" text-anchor="end" font-size="9" fill="var(--mute)">Trade ' + n + '</text></svg>' +
+      '<p class="note">Line: your result over each stretch of ' + W + ' trades. Dashed gold line: your overall average' + (m === 'net' ? ' for ' + W + ' trades' : '') + '.</p>';
+    const card = (v, l, c) => '<div class="stat"><b' + (c ? ' class="' + c + '"' : '') + '>' + v + '</b><span>' + l + '</span></div>';
+    const diff = recent - base;
+    const cards = '<div class="stats" style="grid-template-columns:repeat(auto-fit,minmax(120px,1fr))">' + card(d.fmt(recent), 'Last ' + W + ' trades', (m === 'wr' ? recent >= base : recent >= 0) ? 'pos' : 'neg') + card(d.fmt(base), m === 'net' ? 'Overall pace per ' + W : 'All trades') + card(d.delta(diff), 'Change', diff >= 0 ? 'pos' : 'neg') + '</div>';
+    const thr = m === 'exp' ? 0.15 : m === 'wr' ? 10 : Math.abs(base) * 0.25;
+    const word = m === 'exp' ? 'average result' : m === 'wr' ? 'win rate' : 'net result';
+    const verdict = (m !== 'wr' && recent < 0) ? 'Your last ' + W + ' trades have a negative ' + word + '. Consider trading smaller and reviewing your rules until your results recover.'
+      : diff < -thr ? 'Your recent ' + word + ' is weaker than your overall average. Check whether you are still following your rules.'
+      : diff > thr ? 'Your recent ' + word + ' is stronger than your overall average.'
+      : 'Your recent ' + word + ' is in line with your overall average.';
+    el.innerHTML = cards + '<div style="margin-top:12px">' + chart + '</div><p style="margin:8px 0 0">' + esc(verdict) + '</p>' +
+      '<p class="note" style="text-align:left">' + (d.approx ? 'Fewer than 10 trades have the amount risked logged, so your average loss is used as 1R. ' : '') + 'Rolling numbers wobble a lot, so read the direction over several weeks, not each swing.</p>';
+  }
+
+  let heatCells = {};
+  function drawHeat() {
+    const el = $('heat'); if (!el) return;
+    $('heatTz').textContent = 'Times are in UTC' + (TZ_OFFSET_HOURS >= 0 ? '+' : '−') + Math.abs(TZ_OFFSET_HOURS) + ' (set in TZ_OFFSET_HOURS). Squares with only a few trades mean little.';
+    if (!trades.length) { el.innerHTML = '<div class="empty">The heatmap appears after your first trade.</div>'; $('heatNotes').innerHTML = ''; return; }
+    const m = $('hMetric').value;
+    heatCells = {};
+    trades.forEach(t => {
+      const d = new Date(new Date(t.traded_at).getTime() + TZ_OFFSET_HOURS * 3600000);
+      const k = ((d.getUTCDay() + 6) % 7) + '-' + Math.floor(d.getUTCHours() / 2);
+      (heatCells[k] = heatCells[k] || []).push(t);
+    });
+    const net = a => a.reduce((s, t) => s + t.pnl, 0), wrate = a => a.filter(t => t.pnl > 0).length / a.length * 100;
+    const val = a => m === 'net' ? net(a) : m === 'wr' ? wrate(a) : a.length;
+    const vals = Object.values(heatCells).map(val);
+    const mx = m === 'net' ? Math.max(1, ...vals.map(Math.abs)) : m === 'cnt' ? Math.max(1, ...vals) : 50;
+    const CW = 23.5, CH = 22, X0 = 34, Y0 = 16;
+    let svg = '<svg viewBox="0 0 320 188" style="width:100%;display:block" role="img" aria-label="Results by weekday and time of day">';
+    for (let b = 0; b < 12; b += 2) svg += '<text x="' + (X0 + b * CW + 2) + '" y="10" font-size="9" fill="var(--mute)">' + (b * 2) + '</text>';
+    for (let dy = 0; dy < 7; dy++) {
+      svg += '<text x="30" y="' + (Y0 + dy * (CH + 2) + 15) + '" text-anchor="end" font-size="10" fill="var(--mute)">' + DAYS[dy].slice(0, 3) + '</text>';
+      for (let b = 0; b < 12; b++) {
+        const k = dy + '-' + b, a = heatCells[k], x = X0 + b * CW, y = Y0 + dy * (CH + 2);
+        let fill = 'var(--line)', op = 0.35;
+        if (a) {
+          const v = val(a);
+          if (m === 'net') { fill = v >= 0 ? 'var(--win)' : 'var(--loss)'; op = 0.2 + 0.8 * Math.abs(v) / mx; }
+          else if (m === 'wr') { fill = v >= 50 ? 'var(--win)' : 'var(--loss)'; op = 0.2 + 0.8 * Math.abs(v - 50) / mx; }
+          else { fill = 'var(--ink)'; op = 0.15 + 0.7 * v / mx; }
+        }
+        svg += '<rect data-k="' + k + '" x="' + x.toFixed(1) + '" y="' + y + '" width="' + (CW - 2) + '" height="' + CH + '" rx="3" fill="' + fill + '" opacity="' + op.toFixed(2) + '"/>';
+      }
+    }
+    el.innerHTML = svg + '</svg>';
+    const pad2 = x => String(x).padStart(2, '0');
+    const label = k => { const [dy, b] = k.split('-').map(Number); return DAYS[dy].slice(0, 3) + ' ' + pad2(b * 2) + ':00 to ' + pad2(b * 2 + 2) + ':00'; };
+    const ranked = Object.keys(heatCells).filter(k => heatCells[k].length >= 3).sort((a, b) => net(heatCells[b]) - net(heatCells[a]));
+    const line = (t, k) => t + ': ' + label(k) + ', ' + money(net(heatCells[k])) + ' over ' + heatCells[k].length + ' trades.';
+    const notes = [];
+    if (ranked.length) {
+      if (net(heatCells[ranked[0]]) > 0) notes.push(line('Best window', ranked[0]));
+      const w = ranked[ranked.length - 1]; if (ranked.length > 1 && net(heatCells[w]) < 0) notes.push(line('Weakest window', w));
+    } else notes.push('Windows with at least 3 trades will be ranked here.');
+    $('heatNotes').innerHTML = '<ul class="hl">' + notes.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul>';
+    $('heatInfo').textContent = 'Tap a square for details.';
+    $('heatInfo')._label = label;
+  }
+  function heatTap(k) {
+    const a = heatCells[k], info = $('heatInfo');
+    if (!a) { info.textContent = 'No trades in that window.'; return; }
+    const rs = a.filter(t => t.risk_amount > 0).map(t => t.pnl / t.risk_amount);
+    const net = a.reduce((s, t) => s + t.pnl, 0);
+    info.textContent = info._label(k) + ': ' + a.length + (a.length === 1 ? ' trade, ' : ' trades, ') + Math.round(a.filter(t => t.pnl > 0).length / a.length * 100) + '% won, net ' + money(net) + (rs.length ? ', average ' + fr(rs.reduce((s, x) => s + x, 0) / rs.length) : '') + '.';
+  }
+
   function drawDiscipline() {
     const el = $('disc'); if (!el) return;
     if (!trades.length) { el.innerHTML = '<div class="empty">Your discipline record appears after your first trade.</div>'; return; }
@@ -1091,6 +1226,9 @@ function start() {
     const sv = JSON.parse(localStorage.getItem('tj:sim') || 'null');
     if (sv) { $('sRisk').value = sv.r; $('sTrades').value = sv.t; $('sTarget').value = sv.g; $('sLimit').value = sv.l; if (sv.m) $('sMode').value = sv.m; }
   } catch (x) {}
+  ['rMeasure', 'rWin'].forEach(id => $(id).addEventListener('change', drawRoll));
+  $('hMetric').addEventListener('change', drawHeat);
+  $('heat').addEventListener('click', e => { const k = e.target.getAttribute && e.target.getAttribute('data-k'); if (k) heatTap(k); });
   ['sRisk', 'sTrades', 'sTarget', 'sLimit', 'sMode'].forEach(id => {
     const h = () => { clearTimeout(simTimer); simTimer = setTimeout(drawSim, 350); };
     $(id).addEventListener('input', h); $(id).addEventListener('change', h);
