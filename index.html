@@ -91,6 +91,7 @@ th{color:var(--mute);font-weight:600;font-size:13px}
 form.quick .quick-only{display:block}
 form.quick .full-only{display:none}
 .ovr{border-color:var(--loss)}
+.linkbtn{display:block;text-align:center;border:1px solid var(--line);border-radius:6px;padding:10px 14px;min-height:42px;color:var(--ink);text-decoration:none;background:var(--surface);font-weight:600}
 .trend{margin-bottom:20px}
 .trend-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
 .trend-head h2{margin:0}
@@ -129,6 +130,7 @@ form.quick .full-only{display:none}
     <div class="tabpane" id="tab-log" hidden>
       <section class="panel" id="ownerPane" hidden>
         <h2>New trade</h2>
+        <a class="linkbtn" href="scanner.html" style="margin-bottom:12px">Check the signal scanner first</a>
         <div class="guard ok" id="guard" role="status"></div>
         <details class="calc" id="calc">
           <summary class="sum"><b>Position size calculator</b><span class="note">Tap to open</span></summary>
@@ -317,6 +319,7 @@ form.quick .full-only{display:none}
           <button class="small" id="out" type="button" hidden>Sign out</button>
           <button class="small" id="csv" type="button">Download CSV</button>
         </div>
+        <a class="linkbtn" id="scanLink" href="scanner.html" style="margin-top:12px" hidden>Open the signal scanner</a>
         <button class="owner-link" id="showSignin" type="button" hidden>Owner sign in</button>
       </section>
     </div>
@@ -417,7 +420,7 @@ function start() {
   async function setOwner(session) {
     owner = !!session; $('wkNotes').hidden = !owner; loadReviews(); loadPrivate();
     $('ownerPane').hidden = !owner; $('out').hidden = !owner;
-    $('signin').hidden = owner; $('out').hidden = !owner; $('nav-log').hidden = !owner;
+    $('signin').hidden = owner; $('out').hidden = !owner; $('nav-log').hidden = !owner; $('scanLink').hidden = !owner;
     $('acctState').textContent = owner ? 'You are signed in as the owner.' : 'Owner sign in. Visitors can look but not change anything.';
     if (!owner && tab === 'log') showTab('trades');
     if (owner && tab === 'account') showTab('log');
