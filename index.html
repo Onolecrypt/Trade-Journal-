@@ -816,6 +816,26 @@ function start() {
     try { const h = JSON.parse(localStorage.getItem('tj:handoff') || 'null'); if (h && Date.now() - h.ts < 86400000) return h; } catch (x) {}
     return null;
   }
+  function handoffNote(h) {
+    const p = h.sym.split('/'), buy = h.dir === 'Buy';
+    let cot = 'Institutional (COT) positioning: not available.';
+    if (h.cotBias === 'neutral') cot = 'Institutional (COT) positioning is neutral.';
+    else if (h.cotBias) cot = 'Institutional (COT) positioning leans ' + h.cotBias + ', ' + ((h.cotBias === 'bullish') === buy ? 'in line with' : 'against') + ' this trade.';
+    let rate = 'Rate spread: not available.';
+    if (h.rateDifferential != null) rate = Math.abs(h.rateDifferential) < 0.05 ? 'Rate spread is flat.' : 'Rate spread favors ' + (h.rateDifferential > 0 ? p[0] : p[1]) + ' (' + Math.abs(h.rateDifferential).toFixed(2) + '%).';
+    const vol = h.rvol == null ? 'Volume: not available for this market.' : 'Volume is ' + Number(h.rvol).toFixed(2) + 'x the 20-candle average.';
+    const news = h.newsStatus === 'clear' ? 'No high-impact news within 60 minutes.' : h.newsStatus === 'near' ? 'High-impact news is close.' : 'News calendar not available, check it yourself.';
+    return 'Scanner ' + (buy ? 'BUY' : 'SELL') + ' signal, grade ' + h.score + ' out of 10, target ' + h.targetR + 'R. ' + cot + ' ' + rate + '\n' + vol + ' ' + news;
+  }
+  // Ticks only what the scanner actually checked. Your stop, your risk and your mood stay for you to confirm.
+  function tickFromHandoff(h) {
+    const buy = h.dir === 'Buy', opposed = !!h.cotBias && h.cotBias !== 'neutral' && ((h.cotBias === 'bullish') !== buy);
+    const tick = (re, on) => { const i = CHECKS.findIndex(c => re.test(c)); if (i >= 0) $('chk' + i).checked = !!on; };
+    tick(/trend/i, !opposed);
+    tick(/setup/i, h.rvol == null || h.rvol >= 1.1);
+    tick(/news/i, h.newsStatus === 'clear');
+    showChecks();
+  }
   function showHand() {
     const box = $('handBox'); if (!box) return;
     const on = owner && !!handoff && !editing;
@@ -834,7 +854,10 @@ function start() {
     $('entry').value = h.entry; $('sl').value = h.sl; $('tp').value = h.tp; $('lots').value = h.lots || ''; $('risk').value = h.risk || '';
     $('session').value = autoSession(new Date()); setNow();
     if ([...$('setupTag').options].some(o => o.value === h.setup)) $('setupTag').value = h.setup;
-    $('source').value = 'scanner'; $('analysis').value = h.note || '';
+    $('source').value = 'scanner';
+    const hasCtx = ['rvol', 'newsStatus', 'cotBias', 'rateDifferential'].some(k => k in h);
+    $('analysis').value = hasCtx ? handoffNote(h) : (h.note || '');
+    if (hasCtx) tickFromHandoff(h);
     showRR(); showR(); updateOv();
     $('msg').className = 'msg'; $('msg').textContent = 'Filled in from the scanner. Take the trade your own way, then add the result when it closes.';
     showTab('log');
