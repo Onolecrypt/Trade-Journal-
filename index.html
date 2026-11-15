@@ -131,6 +131,11 @@ form.quick .full-only{display:none}
       <section class="panel" id="ownerPane" hidden>
         <h2>New trade</h2>
         <a class="linkbtn" href="scanner.html" style="margin-bottom:12px">Check the signal scanner first</a>
+        <div class="guard warn" id="handBox" hidden>
+          <b>Scanner idea</b>
+          <p id="handTxt"></p>
+          <div style="display:flex;gap:8px;margin-top:8px"><button type="button" class="small" id="handUse">Fill the form</button><button type="button" class="small" id="handDrop">Discard</button></div>
+        </div>
         <div class="guard ok" id="guard" role="status"></div>
         <details class="calc" id="calc">
           <summary class="sum"><b>Position size calculator</b><span class="note">Tap to open</span></summary>
@@ -164,6 +169,8 @@ form.quick .full-only{display:none}
             <div><label for="lots">Lot size</label><input id="lots" type="number" step="any" min="0" placeholder="0.10"></div>
           </div>
           <label for="setupTag">Setup</label><select id="setupTag"></select>
+          <label for="source">Where did this trade come from?</label>
+          <select id="source"><option value="own">My own analysis</option><option value="scanner">Scanner signal</option><option value="both">My analysis and the scanner agree</option></select>
           <div class="row full-only">
             <div><label for="entry">Entry</label><input id="entry" type="number" step="any" inputmode="decimal"></div>
             <div><label for="sl">Stop loss</label><input id="sl" type="number" step="any" inputmode="decimal"></div>
@@ -252,6 +259,7 @@ form.quick .full-only{display:none}
         <h2>Breakdown</h2>
         <select id="dim" aria-label="Group trades by">
           <option value="setup">By setup</option>
+          <option value="source">By source</option>
           <option value="pair">By pair</option>
           <option value="session">By session</option>
           <option value="weekday">By weekday</option>
@@ -388,7 +396,7 @@ else { $('app').hidden = false; start(); }
 
 function start() {
   const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-  let trades = [], owner = false, shotBlob = null, pendingDelete = null, editing = null, wkStart = mondayOf(new Date()), reviews = {}, reviewsErr = '', privMap = {}, ovMap = {}, calcResult = null, tab = 'trades', mode = 'quick';
+  let trades = [], owner = false, shotBlob = null, pendingDelete = null, editing = null, wkStart = mondayOf(new Date()), reviews = {}, reviewsErr = '', privMap = {}, ovMap = {}, calcResult = null, tab = 'trades', mode = 'quick', handoff = null, handApplied = false, fromScanner = false;
   const imgUrl = p => sb.storage.from('screenshots').getPublicUrl(p).data.publicUrl;
 
   function setNow() { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); $('date').value = d.toISOString().slice(0, 16); }
@@ -424,6 +432,7 @@ function start() {
     $('acctState').textContent = owner ? 'You are signed in as the owner.' : 'Owner sign in. Visitors can look but not change anything.';
     if (!owner && tab === 'log') showTab('trades');
     if (owner && tab === 'account') showTab('log');
+    if (owner && handoff && fromScanner && !handApplied) applyHandoff(); else showHand();
     $('sub').textContent = owner ? 'You are signed in. Visitors see a read-only view.' : 'Every trade, with the chart and the reasoning behind it. Read-only view.';
     render();
   }
@@ -469,7 +478,7 @@ function start() {
         const up = await sb.storage.from('screenshots').upload(image_path, shotBlob, { contentType: 'image/jpeg' });
         if (up.error) throw up.error;
       }
-      const quick = mode === 'quick' && !editing;
+      const quick = mode === 'quick' && !editing && !handApplied;
       if (quick) setNow();
       const priv = $('notesPrivate').checked;
       const secret = { analysis: $('analysis').value, why: $('why').value, lesson: $('lesson').value };
@@ -478,7 +487,7 @@ function start() {
         direction: $('dir').value, session: quick ? autoSession(new Date()) : $('session').value, lots: num($('lots').value), risk_amount: num($('risk').value),
         entry: num($('entry').value), sl: num($('sl').value), tp: num($('tp').value), pnl: num($('pnl').value),
         analysis: priv ? null : secret.analysis, why: priv ? null : secret.why, plan_followed: $('plan').value === 'Yes',
-        feeling: $('feel').value, lesson: priv ? null : secret.lesson, notes_private: priv, rule_override: editing ? !!editing.rule_override : stopNow.length > 0, image_path, setup: $('setupTag').value || null, checklist_ok: CHECKS.every((_, i) => $('chk' + i).checked), mistakes: MISTAKES.filter((_, i) => $('mk' + i).checked)
+        feeling: $('feel').value, lesson: priv ? null : secret.lesson, notes_private: priv, rule_override: editing ? !!editing.rule_override : stopNow.length > 0, image_path, setup: $('setupTag').value || null, source: $('source').value, checklist_ok: CHECKS.every((_, i) => $('chk' + i).checked), mistakes: MISTAKES.filter((_, i) => $('mk' + i).checked)
       };
       const id = editing ? editing.id : crypto.randomUUID();
       const q0 = sb.from('trades');
@@ -500,6 +509,7 @@ function start() {
       }
       if (priv) privMap[id] = { trade_id: id, ...secret }; else delete privMap[id];
       if (editing && shotBlob && oldPath) await sb.storage.from('screenshots').remove([oldPath]);
+      if (handApplied) { handApplied = false; handoff = null; try { localStorage.removeItem('tj:handoff'); } catch (x) {} }
       cancelEdit(true);
       $('f').reset(); shotBlob = null; $('pair').value = 'XAUUSD'; $('session').value = 'London'; setNow(); showRR(); showR();
       $('msg').textContent = 'Saved.'; await load();
@@ -546,7 +556,7 @@ function start() {
       const when = new Date(t.traded_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
       const sec = (h, v) => v ? '<h3>' + h + '</h3><p>' + esc(v) + '</p>' : '';
       const lv = [t.entry != null && 'Entry ' + t.entry, t.sl != null && 'SL ' + t.sl, t.tp != null && 'TP ' + t.tp, t.lots != null && t.lots + ' lots', t.risk_amount != null && 'Risked $' + t.risk_amount].filter(Boolean).join(', ');
-      return '<details class="trade ' + cls + '"><summary><div><div class="t1">' + esc(t.pair) + ' ' + esc(t.direction) + (t.setup ? '<span class="tag">' + esc(t.setup) + '</span>' : '') + (t._quick ? '<span class="tag">Quick re-entry</span>' : '') + (t.checklist_ok === false ? '<span class="tag">Skipped checklist</span>' : '') + (t.mistakes && t.mistakes.length ? '<span class="tag">' + t.mistakes.length + (t.mistakes.length === 1 ? ' mistake' : ' mistakes') + '</span>' : '') + (t.notes_private ? '<span class="tag">Private notes</span>' : '') + (t.rule_override ? '<span class="tag">Rule override</span>' : '') + '</div><div class="t2">' + esc(when) + ', ' + esc(t.session) + (r ? ', planned 1:' + r.toFixed(2) : '') + '</div></div><div style="text-align:right"><div class="pl ' + (t.pnl >= 0 ? 'pos' : 'neg') + '">' + money(t.pnl) + '</div>' + (rm != null ? '<div class="t2">' + fr(rm) + '</div>' : '') + '</div></summary><div class="body">' +
+      return '<details class="trade ' + cls + '"><summary><div><div class="t1">' + esc(t.pair) + ' ' + esc(t.direction) + (t.setup ? '<span class="tag">' + esc(t.setup) + '</span>' : '') + (t.source === 'scanner' ? '<span class="tag">Scanner</span>' : t.source === 'both' ? '<span class="tag">Own + scanner</span>' : '') + (t._quick ? '<span class="tag">Quick re-entry</span>' : '') + (t.checklist_ok === false ? '<span class="tag">Skipped checklist</span>' : '') + (t.mistakes && t.mistakes.length ? '<span class="tag">' + t.mistakes.length + (t.mistakes.length === 1 ? ' mistake' : ' mistakes') + '</span>' : '') + (t.notes_private ? '<span class="tag">Private notes</span>' : '') + (t.rule_override ? '<span class="tag">Rule override</span>' : '') + '</div><div class="t2">' + esc(when) + ', ' + esc(t.session) + (r ? ', planned 1:' + r.toFixed(2) : '') + '</div></div><div style="text-align:right"><div class="pl ' + (t.pnl >= 0 ? 'pos' : 'neg') + '">' + money(t.pnl) + '</div>' + (rm != null ? '<div class="t2">' + fr(rm) + '</div>' : '') + '</div></summary><div class="body">' +
         sec('Levels', lv) + (t.notes_private && !t.analysis && !t.why && !t.lesson ? '<p class="t2" style="margin-top:12px">The written notes for this trade are private.</p>' : '') + sec('Market analysis', t.analysis) + sec('Why I took it', t.why) +
         sec('Plan and feeling', 'Followed plan: ' + (t.plan_followed ? 'Yes' : 'No') + (t.feeling ? '. Felt ' + t.feeling.toLowerCase() + '.' : '')) + sec('Why I broke my rule', t.override_reason) + sec('Mistakes', t.mistakes && t.mistakes.length ? t.mistakes.join(', ') : '') + sec('Lesson learned', t.lesson) +
         (t.image_path ? '<img loading="lazy" src="' + esc(imgUrl(t.image_path)) + '" alt="Chart screenshot for ' + esc(t.pair) + '">' : '') +
@@ -787,7 +797,7 @@ function start() {
     window.scrollTo(0, 0);
   }
   function applyMode() {
-    $('f').classList.toggle('quick', mode === 'quick' && !editing);
+    $('f').classList.toggle('quick', mode === 'quick' && !editing && !handApplied);
     $('mQuick').classList.toggle('on', mode === 'quick');
     $('mFull').classList.toggle('on', mode === 'full');
     updateOv();
@@ -800,6 +810,34 @@ function start() {
   function autoSession(d) {
     const h = d.getUTCHours();
     return h >= 7 && h < 12 ? 'London' : h >= 12 && h < 16 ? 'Overlap' : h >= 16 && h < 21 ? 'New York' : 'Asian';
+  }
+
+  function readHandoff() {
+    try { const h = JSON.parse(localStorage.getItem('tj:handoff') || 'null'); if (h && Date.now() - h.ts < 86400000) return h; } catch (x) {}
+    return null;
+  }
+  function showHand() {
+    const box = $('handBox'); if (!box) return;
+    const on = owner && !!handoff && !editing;
+    box.hidden = !on;
+    if (!on) return;
+    $('handTxt').textContent = handoff.sym.replace('/', '') + ' ' + handoff.dir + ', entry ' + handoff.entry + ', stop ' + handoff.sl + (handApplied ? '. The form is filled in. Add the result when the trade closes.' : '.');
+    $('handUse').hidden = handApplied;
+  }
+  function applyHandoff() {
+    const h = handoff; if (!h || !owner) return;
+    if (editing) cancelEdit(true);
+    handApplied = true; fromScanner = false;
+    try { history.replaceState(null, '', location.pathname + location.hash); } catch (x) {}
+    applyMode();
+    setPair(h.sym.replace('/', '')); $('dir').value = h.dir;
+    $('entry').value = h.entry; $('sl').value = h.sl; $('tp').value = h.tp; $('lots').value = h.lots || ''; $('risk').value = h.risk || '';
+    $('session').value = autoSession(new Date()); setNow();
+    if ([...$('setupTag').options].some(o => o.value === h.setup)) $('setupTag').value = h.setup;
+    $('source').value = 'scanner'; $('analysis').value = h.note || '';
+    showRR(); showR(); updateOv();
+    $('msg').className = 'msg'; $('msg').textContent = 'Filled in from the scanner. Take the trade your own way, then add the result when it closes.';
+    showTab('log');
   }
 
   function showChecks() {
@@ -852,7 +890,7 @@ function start() {
   }
   function currentStop() {
     if (editing) return [];
-    const when = mode === 'quick' ? new Date() : new Date($('date').value || Date.now());
+    const when = (mode === 'quick' && !handApplied) ? new Date() : new Date($('date').value || Date.now());
     return isNaN(when) ? [] : guardAt(when).stop;
   }
   function updateOv() {
@@ -863,6 +901,7 @@ function start() {
     const n = $('ovReason').value.trim().length;
     $('ovCnt').textContent = st.length ? (n >= OVERRIDE_MIN ? 'Reason noted.' : 'Write at least ' + OVERRIDE_MIN + ' characters.') : '';
     $('saveBtn').textContent = editing ? 'Update trade' : (st.length ? 'Save as rule break' : 'Save trade');
+    showHand();
   }
   function drawGuard() {
     const el = $('guard'); if (!el) return;
@@ -1136,7 +1175,7 @@ function start() {
     const d = new Date(t.traded_at); d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
     const set = (id, v) => { $(id).value = v == null ? '' : v; };
     $('date').value = d.toISOString().slice(0, 16);
-    setPair(t.pair); set('dir', t.direction); set('session', t.session); set('setupTag', t.setup);
+    setPair(t.pair); set('dir', t.direction); set('session', t.session); set('setupTag', t.setup); set('source', t.source || 'own');
     set('lots', t.lots); set('entry', t.entry); set('sl', t.sl); set('tp', t.tp); set('pnl', t.pnl); set('risk', t.risk_amount);
     set('analysis', t.analysis); set('why', t.why); set('plan', t.plan_followed ? 'Yes' : 'No'); set('feel', t.feeling); set('lesson', t.lesson);
     $('notesPrivate').checked = !!t.notes_private;
@@ -1160,7 +1199,7 @@ function start() {
   function drawBreakdown() {
     const dim = $('dim').value, g = {};
     trades.forEach(t => {
-      const k = dim === 'weekday' ? DAYS[(new Date(t.traded_at).getDay() + 6) % 7] : dim === 'checklist' ? (t.checklist_ok === true ? 'Checklist done' : t.checklist_ok === false ? 'Checklist skipped' : 'Not recorded') : dim === 'reentry' ? (t._quick ? 'Quick re-entry' : 'Normal entry') : (t[dim] || (dim === 'setup' ? 'Untagged' : '–'));
+      const k = dim === 'weekday' ? DAYS[(new Date(t.traded_at).getDay() + 6) % 7] : dim === 'source' ? ({ scanner: 'Scanner signal', both: 'Own + scanner agree' }[t.source] || 'My own analysis') : dim === 'checklist' ? (t.checklist_ok === true ? 'Checklist done' : t.checklist_ok === false ? 'Checklist skipped' : 'Not recorded') : dim === 'reentry' ? (t._quick ? 'Quick re-entry' : 'Normal entry') : (t[dim] || (dim === 'setup' ? 'Untagged' : '–'));
       (g[k] = g[k] || []).push(t);
     });
     const keys = Object.keys(g);
@@ -1168,7 +1207,7 @@ function start() {
     if (dim === 'weekday') keys.sort((a, b) => DAYS.indexOf(a) - DAYS.indexOf(b));
     else if (dim === 'session') { const o = ['Asian', 'London', 'New York', 'Overlap']; keys.sort((a, b) => o.indexOf(a) - o.indexOf(b)); }
     else keys.sort((a, b) => g[b].reduce((s, t) => s + t.pnl, 0) - g[a].reduce((s, t) => s + t.pnl, 0));
-    const label = { setup: 'Setup', pair: 'Pair', session: 'Session', weekday: 'Day', checklist: 'Checklist', reentry: 'Entry type', feeling: 'Felt' }[dim];
+    const label = { setup: 'Setup', source: 'Source', pair: 'Pair', session: 'Session', weekday: 'Day', checklist: 'Checklist', reentry: 'Entry type', feeling: 'Felt' }[dim];
     const rows = keys.map(k => {
       const a = g[k], n = a.length, w = a.filter(t => t.pnl > 0).length, net = a.reduce((s, t) => s + t.pnl, 0);
       const rs = a.filter(t => t.risk_amount > 0).map(t => t.pnl / t.risk_amount);
@@ -1179,8 +1218,8 @@ function start() {
   }
   $('csv').addEventListener('click', () => {
     const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
-    const head = ['date', 'pair', 'direction', 'session', 'setup', 'lots', 'entry', 'sl', 'tp', 'result', 'risk', 'r_multiple', 'followed_plan', 'checklist_done', 'rule_override', 'mistakes', 'feeling'];
-    const rows = [...trades].reverse().map(t => [t.traded_at, t.pair, t.direction, t.session, t.setup, t.lots, t.entry, t.sl, t.tp, t.pnl, t.risk_amount, t.risk_amount > 0 ? (t.pnl / t.risk_amount).toFixed(2) : '', t.plan_followed ? 'Yes' : 'No', t.checklist_ok == null ? '' : (t.checklist_ok ? 'Yes' : 'No'), t.rule_override ? 'Yes' : 'No', Array.isArray(t.mistakes) ? t.mistakes.join('; ') : '', t.feeling].map(q).join(','));
+    const head = ['date', 'pair', 'direction', 'session', 'setup', 'source', 'lots', 'entry', 'sl', 'tp', 'result', 'risk', 'r_multiple', 'followed_plan', 'checklist_done', 'rule_override', 'mistakes', 'feeling'];
+    const rows = [...trades].reverse().map(t => [t.traded_at, t.pair, t.direction, t.session, t.setup, t.source || 'own', t.lots, t.entry, t.sl, t.tp, t.pnl, t.risk_amount, t.risk_amount > 0 ? (t.pnl / t.risk_amount).toFixed(2) : '', t.plan_followed ? 'Yes' : 'No', t.checklist_ok == null ? '' : (t.checklist_ok ? 'Yes' : 'No'), t.rule_override ? 'Yes' : 'No', Array.isArray(t.mistakes) ? t.mistakes.join('; ') : '', t.feeling].map(q).join(','));
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([[head.join(','), ...rows].join('\n')], { type: 'text/csv' }));
     a.download = 'trading-journal.csv'; a.click();
@@ -1237,6 +1276,16 @@ function start() {
     $(id).addEventListener('input', h); $(id).addEventListener('change', h);
   });
   ['ovReason', 'date'].forEach(id => { $(id).addEventListener('input', updateOv); $(id).addEventListener('change', updateOv); });
+  handoff = readHandoff();
+  try { fromScanner = /[?&]from=scanner/.test(location.search); } catch (x) {}
+  $('handUse').addEventListener('click', applyHandoff);
+  $('handDrop').addEventListener('click', () => {
+    const was = handApplied;
+    handoff = null; handApplied = false; fromScanner = false;
+    try { localStorage.removeItem('tj:handoff'); } catch (x) {}
+    if (was) cancelEdit(false); else applyMode();
+    showHand();
+  });
   try { mode = localStorage.getItem('tj:mode') === 'full' ? 'full' : 'quick'; } catch (x) {}
   ['trades', 'log', 'stats', 'review', 'account'].forEach(t => $('nav-' + t).addEventListener('click', () => showTab(t)));
   $('mQuick').addEventListener('click', () => setMode('quick'));
