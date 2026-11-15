@@ -387,13 +387,29 @@ function eqSvg(cum) {
   return '<svg viewBox="0 0 320 70" role="img" aria-label="Past results in R"><line x1="4" x2="316" y1="' + Y(0) + '" y2="' + Y(0) + '" stroke="var(--line)"/><polyline points="' + cum.map((v, k) => X(k).toFixed(1) + ',' + Y(v).toFixed(1)).join(' ') + '" fill="none" stroke="' + (cum[cum.length - 1] >= 0 ? 'var(--win)' : 'var(--loss)') + '" stroke-width="2" stroke-linejoin="round"/></svg>';
 }
 const R2 = v => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(2) + 'R';
-function lotsFor(r, s) {
+function lotCalc(r, s) {
   const m = MARKETS[r.sym], sig = r.sig, bal = parseFloat(s.bal), rp = parseFloat(s.riskPct);
-  if (!(bal > 0) || !(rp > 0)) return '';
+  if (!(bal > 0) || !(rp > 0)) return null;
   const dist = +Math.abs(sig.entry - sig.sl).toFixed(8), pu = m.perUnit(sig.entry), risk = bal * rp / 100;
   const lots = Math.floor(+(risk / (dist * pu) * 100).toFixed(6)) / 100;
-  if (lots < 0.01) return '<div><b>Too small</b><span>0.01 lots already risks more than ' + rp + '%</span></div>';
-  return '<div><b>' + lots.toFixed(2) + ' lots</b><span>risks about $' + (lots * dist * pu).toFixed(2) + '</span></div>';
+  return { lots, actual: lots * dist * pu };
+}
+function lotsFor(r, s) {
+  const c = lotCalc(r, s);
+  if (!c) return '';
+  if (c.lots < 0.01) return '<div><b>Too small</b><span>0.01 lots already risks more than ' + esc(s.riskPct) + '%</span></div>';
+  return '<div><b>' + c.lots.toFixed(2) + ' lots</b><span>risks about $' + c.actual.toFixed(2) + '</span></div>';
+}
+function sendToJournal(sym) {
+  const r = LAST[sym];
+  if (!r || r.sig.status !== 'signal') return;
+  const sig = r.sig, s = readSettings(), c = lotCalc(r, s), good = c && c.lots >= 0.01;
+  const why = sig.checks.filter(x => !x.info).map(x => x.label + ': ' + x.detail).join('. ');
+  const h = { sym, dir: sig.dir > 0 ? 'Buy' : 'Sell', entry: fmtP(sym, sig.entry), sl: fmtP(sym, sig.sl), tp: fmtP(sym, sig.tp), lots: good ? c.lots.toFixed(2) : '', risk: good ? c.actual.toFixed(2) : '', setup: 'Trend pullback',
+    note: 'Scanner ' + (sig.dir > 0 ? 'BUY' : 'SELL') + ' signal, grade ' + sig.score + ' out of 10, target ' + r.P.targetR + 'R. ' + why + '.', ts: Date.now() };
+  try { localStorage.setItem('tj:handoff', JSON.stringify(h)); }
+  catch (e) { $('status').className = 'msg neg'; $('status').textContent = 'Could not pass the idea to the journal from this browser.'; return; }
+  location.href = 'index.html?from=scanner';
 }
 function verdictOf(st) {
   if (!st.n) return 'No trades in the history. The rules were never met.';
@@ -416,7 +432,7 @@ function cardHtml(r, s) {
   if (!r.stale && sig.status === 'signal') {
     const rr = Math.abs(sig.tp - sig.entry) / sig.slDist;
     h += '<div class="plan"><div><b>' + fmtP(r.sym, sig.entry) + '</b><span>Entry (around)</span></div><div><b class="bad">' + fmtP(r.sym, sig.sl) + '</b><span>Stop loss</span></div><div><b class="ok">' + fmtP(r.sym, sig.tp) + '</b><span>Target (' + rr.toFixed(1) + 'R)</span></div>' + lotsFor(r, s) + '</div>';
-    h += '<p class="note">Valid for about one candle. If price has already moved a long way from the entry, skip it. Check the news calendar first. Setup grade: ' + sig.score + ' out of 10.</p>';
+    h += '<p class="note">Valid for about one candle. If price has already moved a long way from the entry, skip it. Check the news calendar first. Setup grade: ' + sig.score + ' out of 10.</p><button class="small" type="button" data-send="' + esc(r.sym) + '" style="width:100%">Send to journal</button><p class="note">Opens your journal with the Log form filled in. It is saved as a scanner trade so you can compare it with your own.</p>';
   } else if (!r.stale) h += '<p class="sum" style="margin-top:12px">' + esc(sig.why || 'No setup right now.') + '</p>';
   h += '<h3>Why</h3><ul class="ck">' + sig.checks.map(c => '<li><span class="m ' + (c.ok ? 'ok' : c.info ? 'inf' : 'bad') + '">' + (c.ok ? '✓' : c.info ? '–' : '✗') + '</span><span><b>' + esc(c.label) + ':</b> ' + esc(c.detail) + '</span></li>').join('') + '</ul>';
   if (sig.checks.length) h += '<p class="note">Grey dashes are extra context. Only the ticked and crossed lines decide the signal.</p>';
@@ -497,6 +513,8 @@ initSettings();
 $('scan').addEventListener('click', runScan);
 $('test').addEventListener('click', testConnection);
 $('results').addEventListener('click', e => {
+  const sd = e.target.getAttribute && e.target.getAttribute('data-send');
+  if (sd) { sendToJournal(sd); return; }
   const b = e.target.getAttribute && e.target.getAttribute('data-bias');
   if (!b) return;
   const seg = e.target.parentElement, sym = seg.getAttribute('data-sym');
