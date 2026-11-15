@@ -68,6 +68,11 @@ svg{display:block;width:100%}
     <p class="note">Get a free key at twelvedata.com. It is stored only in this browser on this device.</p>
     <button class="small" id="test" type="button" style="margin-top:8px">Test connection</button>
     <div class="msg" id="testMsg" role="status"></div>
+    <button class="small" id="testCtx" type="button">Test outside data</button>
+    <div class="msg" id="ctxMsg" role="status"></div>
+    <label for="proxy">Data relay address (optional)</label>
+    <input id="proxy" type="text" autocomplete="off" placeholder="Only needed if a test says blocked by the browser">
+    <p class="note">A small relay can fetch positioning, news and rates for you when the browser blocks them directly. Leave this empty otherwise.</p>
     <h3>Markets to scan</h3>
     <div class="checks" id="mkts"></div>
     <div class="row">
@@ -361,13 +366,26 @@ const BIS_AREAS = { US: 'USD', XM: 'EUR', GB: 'GBP', JP: 'JPY', AU: 'AUD', CA: '
 
 function cacheGet(key, ttl) { try { const c = JSON.parse(localStorage.getItem(key) || 'null'); if (c && Date.now() - c.at < ttl) return c.data; } catch (e) {} return null; }
 function cacheSet(key, data) { try { localStorage.setItem(key, JSON.stringify({ at: Date.now(), data })); } catch (e) {} }
+let PROXY = '';
+const ext = url => PROXY ? PROXY + (PROXY.includes('?') ? '&' : '?') + 'url=' + encodeURIComponent(url) : url;
 async function fetchTimed(url, opts) {
   const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null, timer = setTimeout(() => { if (ctl) ctl.abort(); }, 9000);
   try {
-    const res = await fetch(url, Object.assign({}, opts || {}, ctl ? { signal: ctl.signal } : {}));
-    if (res && res.ok === false) throw new Error('request failed');
+    let res;
+    try { res = await fetch(ext(url), Object.assign({}, opts || {}, ctl ? { signal: ctl.signal } : {})); }
+    catch (e) { throw new Error(e && e.name === 'AbortError' ? 'timeout' : 'blocked'); }
+    if (res && res.ok === false) throw new Error('HTTP ' + res.status);
     return res;
   } finally { clearTimeout(timer); }
+}
+function explain(m) {
+  m = String(m || '');
+  if (m === 'blocked') return 'blocked by the browser, or no connection';
+  if (m === 'timeout') return 'it took too long to respond';
+  if (m === 'HTTP 429') return 'the source is limiting requests, try again later';
+  if (/^HTTP (401|403)/.test(m)) return 'the source refused the request';
+  if (/^HTTP /.test(m)) return 'the source returned an error (' + m + ')';
+  return 'the source returned something unexpected';
 }
 const pick = (row, names) => { for (const n of names) if (row[n] != null && row[n] !== '') return +row[n]; return NaN; };
 
@@ -407,11 +425,17 @@ async function fetchRates() {
   lines.slice(1).forEach(l => { const c = l.split(','), ccy = BIS_AREAS[c[ia]], v = parseFloat(c[iv]); if (ccy && isFinite(v)) out[ccy] = v; });
   return Object.keys(out).length ? out : null;
 }
-async function loadContext(setStatus) {
+async function loadContext(setStatus, s) {
+  PROXY = s && s.proxy ? s.proxy.trim() : '';
   if (setStatus) setStatus('Checking positioning, news and rates…');
-  const get = async (key, ttl, fn) => { const c = cacheGet(key, ttl); if (c) return c; try { const d = await fn(); if (d) cacheSet(key, d); return d || null; } catch (e) { return null; } };
-  const [cot, news, rates] = await Promise.all([get('sc:cot', 86400000, fetchCOT), get('sc:news', 21600000, fetchNews), get('sc:rates', 604800000, fetchRates)]);
-  return { cot, news, rates: Object.assign({}, RATES_FALLBACK, rates || {}) };
+  const errors = {};
+  const get = async (name, key, ttl, fn) => {
+    const c = cacheGet(key, ttl); if (c) return c;
+    try { const d = await fn(); if (d) cacheSet(key, d); else errors[name] = 'unexpected'; return d || null; }
+    catch (e) { errors[name] = e && e.message ? e.message : 'unexpected'; return null; }
+  };
+  const [cot, news, rates] = await Promise.all([get('cot', 'sc:cot', 86400000, fetchCOT), get('news', 'sc:news', 21600000, fetchNews), get('rates', 'sc:rates', 604800000, fetchRates)]);
+  return { cot, news, rates: Object.assign({}, RATES_FALLBACK, rates || {}), errors };
 }
 const legs = sym => { const p = sym.split('/'); return { b: p[0], q: p[1] }; };
 function cotFor(sym, cot) {
@@ -457,7 +481,7 @@ function applyGates(sig, sym, style, ctx, now) {
   if (macro.length) lines.push('Macro context: ' + macro.join(' · ') + '.');
   const tail = [];
   if (sig.rvol != null) tail.push('Volume ' + sig.rvol.toFixed(2) + 'x average');
-  tail.push(nw.status === 'clear' ? 'No high-impact news within 60 minutes' : nw.status === 'near' ? 'High-impact news is close' : 'News calendar not available, check it yourself');
+  tail.push(nw.status === 'clear' ? 'No high-impact news within 60 minutes' : nw.status === 'near' ? 'High-impact news is close' : 'News calendar not available' + (ctx.errors && ctx.errors.news ? ' (' + explain(ctx.errors.news) + ')' : '') + ', check it yourself');
   lines.push(tail.join(' · ') + '.');
   return { info, lines };
 }
@@ -588,7 +612,7 @@ function rerunHistory() {
   renderResults(LASTLIST, readSettings());
 }
 function readSettings() {
-  return { key: $('key').value.trim(), markets: Object.keys(MARKETS).filter(m => $('mk-' + m.replace('/', '')).checked), style: $('style').value, targetR: parseFloat($('targetR').value) || 2, bal: $('bal').value, riskPct: $('riskPct').value };
+  return { key: $('key').value.trim(), markets: Object.keys(MARKETS).filter(m => $('mk-' + m.replace('/', '')).checked), style: $('style').value, targetR: parseFloat($('targetR').value) || 2, bal: $('bal').value, riskPct: $('riskPct').value, proxy: $('proxy').value.trim() };
 }
 function saveSettings() { try { localStorage.setItem('sc:settings', JSON.stringify(readSettings())); } catch (e) {} }
 function initSettings() {
@@ -596,11 +620,11 @@ function initSettings() {
   try {
     const s = JSON.parse(localStorage.getItem('sc:settings') || 'null');
     if (s) {
-      $('key').value = s.key || ''; $('style').value = s.style || 'swing'; $('targetR').value = String(s.targetR || 2); $('bal').value = s.bal || ''; $('riskPct').value = s.riskPct || '1';
+      $('key').value = s.key || ''; $('style').value = s.style || 'swing'; $('targetR').value = String(s.targetR || 2); $('bal').value = s.bal || ''; $('riskPct').value = s.riskPct || '1'; $('proxy').value = s.proxy || '';
       Object.keys(MARKETS).forEach(m => { $('mk-' + m.replace('/', '')).checked = (s.markets || []).includes(m); });
     }
   } catch (e) {}
-  ['key', 'style', 'targetR', 'bal', 'riskPct'].forEach(id => { $(id).addEventListener('change', saveSettings); $(id).addEventListener('input', saveSettings); });
+  ['key', 'style', 'targetR', 'bal', 'riskPct', 'proxy'].forEach(id => { $(id).addEventListener('change', saveSettings); $(id).addEventListener('input', saveSettings); });
   $('mkts').addEventListener('change', saveSettings);
 }
 async function runScan() {
@@ -608,7 +632,7 @@ async function runScan() {
   if (!s.key) { $('setPanel').open = true; $('status').className = 'msg neg'; $('status').textContent = 'Add your free Twelve Data key in Settings first.'; return; }
   if (!s.markets.length) { $('setPanel').open = true; $('status').className = 'msg neg'; $('status').textContent = 'Tick at least one market in Settings.'; return; }
   btn.disabled = true; $('results').innerHTML = ''; LAST = {};
-  const ctx = await loadContext(setStatus);
+  const ctx = await loadContext(setStatus, s);
   const st = STYLES[s.style], out = [];
   for (const sym of s.markets) {
     try {
@@ -619,6 +643,17 @@ async function runScan() {
     } catch (e) { out.push({ sym, error: e.message }); }
   }
   LASTLIST = out; renderResults(out, s); setStatus(''); btn.disabled = false;
+}
+async function testOutside() {
+  const el = $('ctxMsg'); PROXY = $('proxy').value.trim();
+  el.className = 'msg'; el.textContent = 'Testing…';
+  const run = async (label, fn, ok) => { try { const d = await fn(); return label + ': ' + (d ? ok(d) : 'reachable, but it returned nothing'); } catch (e) { return label + ': ' + explain(e.message); } };
+  const lines = [
+    await run('Positioning (COT)', fetchCOT, d => 'working, latest report ' + (Object.values(d)[0].date)),
+    await run('News calendar', fetchNews, d => 'working, ' + d.length + ' high-impact events this week'),
+    await run('Policy rates', fetchRates, d => 'working, ' + Object.keys(d).length + ' countries')
+  ];
+  el.innerHTML = lines.map(esc).join('<br>');
 }
 async function testConnection() {
   const key = $('key').value.trim(), el = $('testMsg');
@@ -644,6 +679,7 @@ function biasTap(sym, b) {
 initSettings();
 $('scan').addEventListener('click', runScan);
 $('test').addEventListener('click', testConnection);
+$('testCtx').addEventListener('click', testOutside);
 $('results').addEventListener('change', e => {
   if (e.target.getAttribute && e.target.getAttribute('data-volhist') !== null) {
     VOLHIST = !!e.target.checked;
