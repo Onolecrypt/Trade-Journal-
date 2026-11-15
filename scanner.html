@@ -105,6 +105,13 @@ const MARKETS = {
 };
 const STYLES = { swing: { ltf: '1h', htf: '4h', htfLabel: '4H trend' }, intraday: { ltf: '15min', htf: '1h', htfLabel: '1H trend' } };
 const MS = { '15min': 900000, '1h': 3600000, '4h': 14400000 };
+// The data arrives in UTC, but every time you read here is shown in your own zone.
+// East Africa Time (Uganda, Kenya, Tanzania) is UTC+3. Change both lines to show another zone.
+const TZ_HOURS = 3, TZ_NAME = 'EAT';
+const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const shifted = ts => new Date(ts + TZ_HOURS * 3600000);
+const clock = ts => shifted(ts).toISOString().slice(11, 16);
+const when = ts => shifted(ts).toISOString().slice(0, 10) === shifted(Date.now()).toISOString().slice(0, 10) ? clock(ts) : DOW[shifted(ts).getUTCDay()] + ' ' + clock(ts);
 
 /* ---------- indicators (all causal: a value at bar i uses only bars up to i) ---------- */
 function EMA(v, p) {
@@ -472,7 +479,7 @@ function applyGates(sig, sym, style, ctx, now) {
     const reasons = [];
     if (sig.volHeld) reasons.push(sig.why);
     if (style === 'swing' && cot && ((sig.dir > 0 && cot.bias === 'bearish') || (sig.dir < 0 && cot.bias === 'bullish'))) reasons.push('Institutional COT positioning favors the opposite direction — held at WATCH.');
-    if (nw.status === 'near') reasons.push('High-impact ' + nw.ev.ccy + ' news (' + nw.ev.title + ') within 60 mins — holding off entry.');
+    if (nw.status === 'near') reasons.push('High-impact ' + nw.ev.ccy + ' news (' + nw.ev.title + ', ' + clock(nw.ev.ts) + ' ' + TZ_NAME + ') within 60 mins — holding off entry.');
     if (reasons.length) { sig.status = 'watch'; sig.why = reasons.join(' '); }
   }
   const lines = [], macro = [];
@@ -574,9 +581,8 @@ function cardHtml(r, s) {
   if (r.stale) badge = ['stale', 'MARKET QUIET'];
   else if (sig.status === 'signal') badge = sig.dir > 0 ? ['buy', 'BUY SIGNAL'] : ['sell', 'SELL SIGNAL'];
   else if (sig.status === 'watch') badge = ['watch', 'WATCH'];
-  const closeAt = new Date(r.to + MS[r.st.ltf]).toISOString().slice(11, 16);
   let h = '<section class="panel"><div class="head"><div><div class="sym">' + esc(r.sym) + '</div><div class="price">' + esc(m.name) + ', last close ' + fmtP(r.sym, r.price) + '</div></div><span class="badge ' + badge[0] + '">' + badge[1] + '</span></div>';
-  h += '<p class="note">Based on the ' + (r.st.ltf === '15min' ? '15m' : '1H') + ' candle that closed at ' + closeAt + ' UTC' + (r.ageMin > 0 ? ' (' + (r.ageMin >= 120 ? Math.round(r.ageMin / 60) + ' hours' : r.ageMin + ' min') + ' ago)' : '') + '.</p>';
+  h += '<p class="note">Based on the ' + (r.st.ltf === '15min' ? '15m' : '1H') + ' candle that closed at ' + when(r.to + MS[r.st.ltf]) + ' ' + TZ_NAME + (r.ageMin > 0 ? ' (' + (r.ageMin >= 120 ? Math.round(r.ageMin / 60) + ' hours' : r.ageMin + ' min') + ' ago)' : '') + '.</p>';
   if (r.gate) h += r.gate.lines.map(l => '<p class="note">' + esc(l) + '</p>').join('');
   if (r.stale) h += '<div class="warn">The last candle is old, so the market may be closed. Scan again when it reopens.</div>';
   if (!r.stale && sig.status === 'signal') {
@@ -599,7 +605,7 @@ function cardHtml(r, s) {
 }
 function renderResults(list, s) {
   const ok = list.filter(x => !x.error), sg = ok.filter(x => !x.stale && x.sig.status === 'signal').length, w = ok.filter(x => !x.stale && x.sig.status === 'watch').length;
-  let h = ok.length ? '<div class="panel"><b>' + (sg ? sg + (sg === 1 ? ' signal' : ' signals') + ' found' : 'No signals right now') + '</b>' + (w ? ', ' + w + ' to watch' : '') + '<p class="note" style="margin:6px 0 0">Scanned ' + ok.length + (ok.length === 1 ? ' market' : ' markets') + ' at ' + new Date().toISOString().slice(11, 16) + ' UTC. Most scans will find nothing, and that is normal. Waiting is part of the strategy.</p></div>' : '<div class="panel"><b>The scan could not finish</b><p class="note" style="margin:6px 0 0">See the message below.</p></div>';
+  let h = ok.length ? '<div class="panel"><b>' + (sg ? sg + (sg === 1 ? ' signal' : ' signals') + ' found' : 'No signals right now') + '</b>' + (w ? ', ' + w + ' to watch' : '') + '<p class="note" style="margin:6px 0 0">Scanned ' + ok.length + (ok.length === 1 ? ' market' : ' markets') + ' at ' + clock(Date.now()) + ' ' + TZ_NAME + '. Most scans will find nothing, and that is normal. Waiting is part of the strategy.</p></div>' : '<div class="panel"><b>The scan could not finish</b><p class="note" style="margin:6px 0 0">See the message below.</p></div>';
   list.forEach(r => { h += r.error ? '<section class="panel"><div class="sym">' + esc(r.sym) + '</div><p class="neg">' + esc(r.error) + '</p></section>' : cardHtml(r, s); });
   $('results').innerHTML = h;
 }
@@ -662,7 +668,7 @@ async function testConnection() {
   try {
     const res = await fetch('https://api.twelvedata.com/time_series?symbol=EUR/USD&interval=1h&outputsize=1&timezone=UTC&apikey=' + encodeURIComponent(key)), d = await res.json();
     if (d.status === 'error') { el.className = 'msg neg'; el.textContent = d.message || 'The key was rejected.'; }
-    else { el.className = 'msg pos'; el.textContent = 'Connected. Latest EUR/USD candle: ' + d.values[0].datetime + ' UTC.'; }
+    else { el.className = 'msg pos'; const t = Date.parse(String(d.values[0].datetime).replace(' ', 'T') + 'Z'); el.textContent = 'Connected. Latest EUR/USD candle: ' + (isFinite(t) ? when(t) + ' ' + TZ_NAME : d.values[0].datetime + ' UTC') + '.'; }
   } catch (e) { el.className = 'msg neg'; el.textContent = 'Could not reach Twelve Data. This may be your connection, or the browser blocking the request.'; }
 }
 function biasTap(sym, b) {
