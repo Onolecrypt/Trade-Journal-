@@ -1,0 +1,8 @@
+{
+  "markets": ["XAU/USD", "EUR/USD"],
+  "style": "swing",
+  "targetR": 2,
+  "minGrade": 0,
+  "alertOnWatch": false,
+  "journalUrl": ""
+}
